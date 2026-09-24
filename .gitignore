@@ -1,0 +1,7 @@
+/data/
+/nexa
+/nexa.exe
+*.db
+*.db-shm
+*.db-wal
+*.log

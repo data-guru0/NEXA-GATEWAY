@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#10120f">
+  <title>Nexa Gateway</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div id="toast-stack" class="toast-stack" aria-live="polite"></div>
+
+  <main id="login-view" class="login-shell">
+    <section class="login-stage">
+      <div class="stage-grid" aria-hidden="true"></div>
+      <div class="login-brand">
+        <div class="brand-mark"><span>N</span><i></i></div>
+        <span>NEXA / GATEWAY</span>
+      </div>
+      <div class="stage-copy">
+        <div class="eyebrow"><span class="live-dot"></span> Independent inference infrastructure</div>
+        <h1>One route.<br><em>Every model.</em></h1>
+        <p>Control your providers, inspect every request, and move between models without rewriting your application.</p>
+      </div>
+      <div class="route-map" aria-hidden="true">
+        <div class="route-origin"><span>YOUR APP</span></div>
+        <div class="route-line"><i></i><i></i><i></i></div>
+        <div class="route-core"><b>N</b><span>NEXA</span></div>
+        <div class="route-fan"><i></i><i></i><i></i><i></i></div>
+        <div class="route-nodes"><span>OPENAI</span><span>GROQ</span><span>GEMINI</span><span>CLAUDE</span></div>
+      </div>
+      <div class="stage-foot"><span>SELF-HOSTED</span><span>ENCRYPTED</span><span>OBSERVABLE</span></div>
+    </section>
+
+    <section class="login-panel">
+      <form id="login-form" class="login-form">
+        <div class="form-index">01 / ACCESS</div>
+        <h2>Enter the control room</h2>
+        <p>Use the master key printed during first startup, or a local Nexa account.</p>
+        <div class="segmented" role="tablist">
+          <button type="button" class="active" data-login-mode="master">Master key</button>
+          <button type="button" data-login-mode="user">User account</button>
+        </div>
+        <div id="master-fields">
+          <label class="field"><span>MASTER KEY</span><input id="master-key" type="password" autocomplete="current-password" placeholder="nexa_••••••••••••••••" required><button class="reveal" type="button" data-reveal="master-key">SHOW</button></label>
+          <div class="field-note">Find it in the container logs from the first run.</div>
+        </div>
+        <div id="user-fields" class="hidden">
+          <label class="field"><span>USERNAME</span><input id="login-username" autocomplete="username" placeholder="operator"></label>
+          <label class="field"><span>PASSWORD</span><input id="login-password" type="password" autocomplete="current-password" placeholder="Your password"><button class="reveal" type="button" data-reveal="login-password">SHOW</button></label>
+        </div>
+        <div id="login-error" class="form-error hidden"></div>
+        <button class="primary-action" type="submit"><span>Open dashboard</span><b>↗</b></button>
+        <div class="login-meta"><span><i></i> LOCAL SESSION</span><span id="version-label">NEXA v0.1.0</span></div>
+      </form>
+    </section>
+  </main>
+
+  <div id="app-view" class="app-shell hidden">
+    <aside class="sidebar">
+      <a class="sidebar-brand" href="#overview" aria-label="Nexa Gateway home"><div class="brand-mark small"><span>N</span><i></i></div><div><b>NEXA</b><small>GATEWAY</small></div></a>
+      <nav class="main-nav" aria-label="Main navigation">
+        <a href="#overview" data-route="overview" class="active"><span class="nav-icon">⌁</span><b>Overview</b><small>01</small></a>
+        <a href="#providers" data-route="providers"><span class="nav-icon">◇</span><b>Providers</b><small>02</small></a>
+        <a href="#traces" data-route="traces"><span class="nav-icon">⌇</span><b>Traces</b><small>03</small></a>
+        <a href="#playground" data-route="playground"><span class="nav-icon">↗</span><b>Playground</b><small>04</small></a>
+        <a href="#team" data-route="team"><span class="nav-icon">◎</span><b>Access</b><small>05</small></a>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="system-pulse"><span class="pulse-orbit"><i></i></span><div><b>Gateway online</b><small id="sidebar-requests">0 requests / 24h</small></div></div>
+        <button id="logout-button" class="logout-button"><span>Sign out</span><span>→</span></button>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <button id="menu-toggle" class="menu-toggle" aria-label="Toggle menu">☰</button>
+        <div class="breadcrumb"><span>NEXA</span><i>/</i><b id="page-crumb">OVERVIEW</b></div>
+        <div class="top-actions">
+          <a class="endpoint-chip" href="#playground"><i></i><span>localhost:8080</span><b>/v1</b></a>
+          <button id="refresh-button" class="icon-button" title="Refresh data">↻</button>
+          <div class="user-chip"><span id="user-initial">M</span><div><b id="user-name">Master administrator</b><small id="user-role">OWNER</small></div></div>
+        </div>
+      </header>
+
+      <section id="page-overview" class="page active">
+        <div class="page-head">
+          <div><div class="section-code">01 — SYSTEM PULSE</div><h1>Everything flowing<br><em>through one place.</em></h1></div>
+          <div class="overview-head-side"><div class="compact-status"><i></i><div><span>GATEWAY</span><b>Operational</b></div></div><div class="head-clock"><span id="clock-time">00:00:00</span><small>LOCAL / <b id="clock-zone">IST</b></small></div></div>
+        </div>
+        <div class="metric-grid">
+          <article class="metric-card acid"><header><span>REQUESTS</span><b id="stat-range-label">24H</b></header><strong id="stat-requests">0</strong><footer><span class="mini-spark" id="requests-spark"></span><span>gateway traffic</span></footer></article>
+          <article class="metric-card"><header><span>SUCCESS RATE</span><b>HEALTH</b></header><strong id="stat-success">100<sup>%</sup></strong><footer><span class="status-mark good"></span><span id="success-caption">All systems nominal</span></footer></article>
+          <article class="metric-card"><header><span>TOKENS</span><b>SELECTED</b></header><strong id="stat-tokens">0</strong><footer><span>↗</span><span>input + output</span></footer></article>
+          <article class="metric-card dark"><header><span>SPEND</span><b>EST.</b></header><strong id="stat-cost">$0.00</strong><footer><span>◌</span><span>known model pricing</span></footer></article>
+          <article class="metric-card"><header><span>PROVIDER LATENCY</span><b>AVG</b></header><strong id="stat-provider-latency">—</strong><footer><span>→</span><span>upstream API response time</span></footer></article>
+          <article class="metric-card"><header><span>GATEWAY OVERHEAD</span><b>AVG</b></header><strong id="stat-gateway-latency">—</strong><footer><span>⊕</span><span>Nexa processing time</span></footer></article>
+        </div>
+        <article class="panel traffic-panel">
+          <header class="panel-head chart-head"><div><span class="panel-kicker" id="traffic-period">TRAFFIC / 24 HOURS</span><h2>Request velocity</h2></div><div class="chart-head-tools"><div class="legend"><span><i class="ok"></i>Requests</span><span><i class="err"></i>Errors</span></div><label class="chart-range-select"><span>PERIOD</span><select id="chart-range"><option value="5m">Past 5 minutes</option><option value="30m">Past 30 minutes</option><option value="1h">Past hour</option><option value="6h">Past 6 hours</option><option value="24h" selected>Past 24 hours</option><option value="7d">Past 7 days</option><option value="30d">Past 30 days</option><option value="custom">Custom range</option></select></label></div></header>
+          <form id="custom-range" class="custom-range hidden"><label>FROM<input id="chart-from" type="datetime-local"></label><span>→</span><label>TO<input id="chart-to" type="datetime-local"></label><button type="submit">Apply range</button></form>
+          <div id="traffic-chart" class="traffic-chart"><div class="chart-empty">Waiting for the first request.</div></div>
+        </article>
+        <article class="panel recent-panel">
+          <header class="panel-head"><div><span class="panel-kicker">LIVE JOURNAL</span><h2>Recent traces</h2></div><a href="#traces" class="text-link">Explore all traces <span>→</span></a></header>
+          <div class="table-wrap"><table><thead><tr><th>STATUS</th><th>PROVIDER</th><th>MODEL</th><th>TOKENS</th><th>LATENCY</th><th>COST</th><th>TIME</th></tr></thead><tbody id="recent-traces"></tbody></table></div>
+        </article>
+      </section>
+
+      <section id="page-providers" class="page">
+        <div class="page-title-row"><div><div class="section-code">02 — CONNECTIONS</div><h1>Provider fabric</h1><p>Credentials are AES-256 encrypted before they touch disk.</p></div><button class="primary-action compact" data-open-provider><span>Add provider</span><b>＋</b></button></div>
+        <div id="provider-grid" class="provider-grid"></div>
+        <div class="integration-note"><span>ROUTING CONVENTION</span><div><code>provider-slug/model-name</code><button data-copy="provider-slug/model-name">COPY</button></div><p>Use this model value with any OpenAI SDK pointed at Nexa. A single configured provider also accepts bare model names.</p></div>
+      </section>
+
+      <section id="page-traces" class="page">
+        <div class="page-title-row"><div><div class="section-code">03 — OBSERVABILITY</div><h1>Trace journal</h1><p>The full story of every request, from prompt to response.</p></div><div class="trace-count"><strong id="trace-total">0</strong><span>RECORDED</span></div></div>
+        <div class="filter-bar"><form id="trace-search-form" class="search-field" role="search"><button class="search-submit" type="submit" aria-label="Search traces" title="Search">⌕</button><input id="trace-search" type="search" autocomplete="off" aria-label="Search traces" placeholder="Search prompts, responses, models, providers…"><button id="trace-search-clear" class="search-clear hidden" type="button" aria-label="Clear trace search" title="Clear search">×</button></form><div class="filter-tabs"><button class="active" data-status="all">All</button><button data-status="success">Success</button><button data-status="error">Errors</button></div><button id="trace-refresh" class="outline-button">Refresh ↻</button></div>
+        <div class="panel trace-table-panel"><div class="table-wrap"><table class="trace-table"><thead><tr><th>OUTCOME</th><th>ROUTE</th><th>MODEL</th><th>TOKENS</th><th>LATENCY</th><th>COST</th><th>CREATED</th><th></th></tr></thead><tbody id="trace-table"></tbody></table></div></div>
+      </section>
+
+      <section id="page-playground" class="page playground-page">
+        <div class="page-title-row"><div><div class="section-code">04 — LIVE LAB</div><h1>Playground</h1><p>Send a real request through the exact same gateway path as your application.</p></div><div class="lab-badge"><i></i>LIVE TRAFFIC</div></div>
+        <div class="playground-shell">
+          <aside class="play-controls">
+            <div class="control-heading"><span>RUN CONFIGURATION</span><b>⌘↵ to send</b></div>
+            <label><span>PROVIDER</span><select id="play-provider"></select></label>
+            <label><span>MODEL <b id="model-count"></b></span><div class="model-input-row"><select id="play-model"></select><button id="reload-models" title="Reload chat-capable models">↻</button></div></label>
+            <label><span>SYSTEM INSTRUCTION</span><textarea id="play-system" rows="5" placeholder="You are a concise, thoughtful assistant.">You are a concise, thoughtful assistant.</textarea></label>
+            <label><span>TEMPERATURE <b id="temperature-value">0.7</b></span><input id="play-temperature" type="range" min="0" max="2" step="0.1" value="0.7"></label>
+            <label><span>MAX OUTPUT TOKENS</span><input id="play-max-tokens" type="number" min="1" max="32768" value="1024"></label>
+            <button id="clear-chat" class="outline-button full">Clear conversation</button>
+          </aside>
+          <div class="chat-stage">
+            <div class="chat-top"><div><span class="live-dot"></span><b id="chat-route">NO ROUTE SELECTED</b></div><span id="chat-metrics">READY</span></div>
+            <div id="chat-messages" class="chat-messages"><div class="chat-welcome"><div class="welcome-glyph">N</div><h2>Test the route.</h2><p>Select a provider and model, then send a message. This is a real request and will appear in Traces.</p></div></div>
+            <form id="chat-form" class="composer"><textarea id="chat-input" rows="2" placeholder="Ask the model something…" required></textarea><button type="submit"><span>SEND</span><b>↗</b></button><small>⌘ ENTER</small></form>
+          </div>
+        </div>
+      </section>
+
+      <section id="page-team" class="page">
+        <div class="page-title-row"><div><div class="section-code">05 — ACCESS CONTROL</div><h1>People & keys</h1><p>Invite local operators without sharing the master credential.</p></div><button class="primary-action compact" data-open-user><span>Create user</span><b>＋</b></button></div>
+        <div class="access-grid">
+          <article class="panel"><header class="panel-head"><div><span class="panel-kicker">LOCAL ACCOUNTS</span><h2>Dashboard users</h2></div></header><div id="users-list" class="users-list"></div></article>
+          <article class="master-card"><div class="key-art"><span>KEY / ROOT</span><b>⌁</b><i></i></div><div><span class="panel-kicker">MASTER CREDENTIAL</span><h2>Root of trust</h2><p>The master key authenticates API traffic and the owner dashboard. Rotating it immediately invalidates the previous value.</p><button id="rotate-key" class="danger-button">Rotate master key</button></div></article>
+        </div>
+        <article class="panel sdk-panel"><header><span class="panel-kicker">CONNECT YOUR APP</span><div class="code-tabs"><button class="active" data-code="python">PYTHON</button><button data-code="javascript">JAVASCRIPT</button><button data-code="curl">CURL</button></div></header><pre id="sdk-code"></pre><button id="copy-sdk" class="copy-code">COPY</button></article>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="provider-dialog" class="modal">
+    <form id="provider-form" method="dialog">
+      <header><div><span class="section-code">CONNECTION / NEW</span><h2 id="provider-dialog-title">Add provider</h2></div><button type="button" data-close-dialog>×</button></header>
+      <input id="provider-id" type="hidden">
+      <div class="provider-types">
+        <label><input type="radio" name="provider-type" value="openai" checked><span><b>OA</b>OpenAI</span></label>
+        <label><input type="radio" name="provider-type" value="groq"><span><b>GQ</b>Groq</span></label>
+        <label><input type="radio" name="provider-type" value="gemini"><span><b>GM</b>Gemini</span></label>
+        <label><input type="radio" name="provider-type" value="anthropic"><span><b>AN</b>Anthropic</span></label>
+        <label><input type="radio" name="provider-type" value="custom"><span><b>CU</b>Custom</span></label>
+      </div>
+      <div class="form-grid"><label class="field"><span>DISPLAY NAME</span><input id="provider-name" required placeholder="Production OpenAI"></label><label class="field"><span>ROUTING SLUG</span><input id="provider-slug" required placeholder="openai-prod"></label></div>
+      <label class="field"><span>BASE URL</span><input id="provider-url" type="url" placeholder="Filled automatically"><small id="provider-url-note" class="provider-field-note">Provider endpoint is filled automatically.</small></label>
+      <label class="field"><span>API KEY</span><input id="provider-key" type="password" placeholder="Stored with AES-256 encryption"><button class="reveal" type="button" data-reveal="provider-key">SHOW</button></label>
+      <label class="toggle-row"><span><b>Connection enabled</b><small>Allow live traffic to use this route</small></span><input id="provider-enabled" type="checkbox" checked><i></i></label>
+      <div id="provider-error" class="form-error hidden"></div>
+      <footer><button type="button" class="outline-button" data-close-dialog>Cancel</button><button type="submit" class="primary-action compact"><span>Save connection</span><b>↗</b></button></footer>
+    </form>
+  </dialog>
+
+  <dialog id="user-dialog" class="modal small-modal"><form id="user-form" method="dialog"><header><div><span class="section-code">ACCESS / NEW</span><h2>Create user</h2></div><button type="button" data-close-dialog>×</button></header><label class="field"><span>USERNAME</span><input id="new-username" minlength="3" required placeholder="operator"></label><label class="field"><span>PASSWORD</span><input id="new-password" type="password" minlength="8" required placeholder="At least 8 characters"></label><label class="field"><span>ROLE</span><select id="new-role"><option value="member">Member</option><option value="admin">Administrator</option></select></label><div id="user-error" class="form-error hidden"></div><footer><button type="button" class="outline-button" data-close-dialog>Cancel</button><button type="submit" class="primary-action compact"><span>Create user</span><b>＋</b></button></footer></form></dialog>
+
+  <dialog id="trace-dialog" class="modal trace-modal"><div><header><div><span class="section-code">TRACE / DETAIL</span><h2 id="trace-dialog-title">Request trace</h2></div><button type="button" data-close-dialog>×</button></header><div class="trace-modebar"><div><span>DISPLAY MODE</span><p id="trace-view-description">Conversation formatted for reading</p></div><div class="view-tabs"><button class="active" data-trace-view="readable">Readable</button><button data-trace-view="json">Raw JSON</button></div></div><div id="trace-detail"></div></div></dialog>
+  <dialog id="key-dialog" class="modal small-modal"><div><header><div><span class="section-code">SAVE THIS NOW</span><h2>New master key</h2></div><button type="button" data-close-dialog>×</button></header><p>This value will not be shown again. The previous master key no longer works.</p><div class="key-reveal"><code id="new-master-key"></code><button id="copy-master-key">COPY</button></div></div></dialog>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>

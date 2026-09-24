@@ -1,0 +1,12 @@
+services:
+  nexa-gateway:
+    build: .
+    image: nexa-gateway:local
+    ports:
+      - "${NEXA_PORT:-8080}:8080"
+    volumes:
+      - nexa-data:/data
+    restart: unless-stopped
+
+volumes:
+  nexa-data:
