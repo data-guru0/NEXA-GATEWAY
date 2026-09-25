@@ -138,3 +138,8 @@ tr[data-trace-id]:focus-visible{outline:2px solid var(--ink);outline-offset:-2px
 .play-controls .switch-hint{margin:0;padding:10px 13px;border-top:1px dashed var(--line);font:9px/1.5 var(--mono);color:#555a51;background:#efffba}
 .json-note{display:inline-block;margin-top:8px;font:700 8px var(--mono);letter-spacing:.06em;padding:4px 7px}.json-note.ok{background:#e4f5e7;color:#1f7a44}.json-note.bad{background:#ffe1da;color:#9f2314}
 @media (prefers-reduced-motion:reduce){.play-controls .switch,.play-controls .switch i{transition:none}}
+
+/* Product structure — every rule below reuses the original Nexa tokens, type and hard edges */
+@font-face{font-family:Inter;src:url(/fonts/inter.woff2) format("woff2");font-weight:100 900;font-display:swap}
+:root{--surface:#f9f7f1}
+body{font-variant-numeric:tabular-nums}

@@ -106,7 +106,11 @@ func New(s *store.Store, log *slog.Logger, secureCookies bool) http.Handler {
 			p = "index.html"
 			body, _ = fs.ReadFile(static, p)
 		}
-		if contentType := mime.TypeByExtension(filepath.Ext(p)); contentType != "" {
+		contentType := mime.TypeByExtension(filepath.Ext(p))
+		if filepath.Ext(p) == ".woff2" {
+			contentType = "font/woff2" // not in Go's built-in table, and distroless has no mime.types
+		}
+		if contentType != "" {
 			w.Header().Set("Content-Type", contentType)
 		}
 		// Assets are embedded and unversioned, so always revalidate after a container update.
