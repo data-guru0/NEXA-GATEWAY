@@ -88,21 +88,31 @@ type Trace struct {
 }
 
 type Stats struct {
-	Requests24H   int64     `json:"requests_24h"`
-	Requests      int64     `json:"requests"`
-	SuccessRate   float64   `json:"success_rate"`
-	Tokens24H     int64     `json:"tokens_24h"`
-	Cost24H       float64   `json:"cost_24h"`
-	AvgLatencyMS  float64   `json:"avg_latency_ms"`
-	P50LatencyMS  float64   `json:"p50_latency_ms"`
-	P95LatencyMS  float64   `json:"p95_latency_ms"`
-	AvgUpstreamMS float64   `json:"avg_upstream_latency_ms"`
-	AvgGatewayMS  float64   `json:"avg_gateway_latency_ms"`
-	Providers     int64     `json:"providers"`
-	Hourly        []Point   `json:"hourly"`
-	Range         string    `json:"range"`
-	From          time.Time `json:"from"`
-	To            time.Time `json:"to"`
+	Requests24H   int64         `json:"requests_24h"`
+	Requests      int64         `json:"requests"`
+	SuccessRate   float64       `json:"success_rate"`
+	Tokens24H     int64         `json:"tokens_24h"`
+	Cost24H       float64       `json:"cost_24h"`
+	AvgLatencyMS  float64       `json:"avg_latency_ms"`
+	P50LatencyMS  float64       `json:"p50_latency_ms"`
+	P95LatencyMS  float64       `json:"p95_latency_ms"`
+	AvgUpstreamMS float64       `json:"avg_upstream_latency_ms"`
+	AvgGatewayMS  float64       `json:"avg_gateway_latency_ms"`
+	Providers     int64         `json:"providers"`
+	Hourly        []Point       `json:"hourly"`
+	Previous      StatsPrevious `json:"previous"`
+	Range         string        `json:"range"`
+	From          time.Time     `json:"from"`
+	To            time.Time     `json:"to"`
+}
+
+type StatsPrevious struct {
+	Requests      int64   `json:"requests"`
+	SuccessRate   float64 `json:"success_rate"`
+	Tokens        int64   `json:"tokens"`
+	Cost          float64 `json:"cost"`
+	AvgUpstreamMS float64 `json:"avg_upstream_latency_ms"`
+	AvgGatewayMS  float64 `json:"avg_gateway_latency_ms"`
 }
 
 type Point struct {
@@ -110,6 +120,8 @@ type Point struct {
 	Timestamp  time.Time `json:"timestamp"`
 	Requests   int64     `json:"requests"`
 	Errors     int64     `json:"errors"`
+	Tokens     int64     `json:"tokens"`
+	Cost       float64   `json:"cost"`
 	UpstreamMS float64   `json:"upstream_latency_ms"`
 	GatewayMS  float64   `json:"gateway_latency_ms"`
 }
@@ -1126,6 +1138,8 @@ func (s *Store) Stats(from, to time.Time, bucket time.Duration, rangeName string
 			idx = len(x.Hourly) - 1
 		}
 		x.Hourly[idx].Requests++
+		x.Hourly[idx].Tokens += tokens
+		x.Hourly[idx].Cost += cost
 		if status != "success" {
 			x.Hourly[idx].Errors++
 		}
@@ -1152,8 +1166,19 @@ func (s *Store) Stats(from, to time.Time, bucket time.Duration, rangeName string
 			x.Hourly[i].GatewayMS = bucketTotals[i].gateway / float64(bucketTotals[i].count)
 		}
 	}
+	x.Previous = s.statsPrevious(from.Add(-to.Sub(from)), from)
 	_ = s.DB.QueryRow("SELECT COUNT(*) FROM providers WHERE enabled=1").Scan(&x.Providers)
 	return x, nil
+}
+
+func (s *Store) statsPrevious(from, to time.Time) StatsPrevious {
+	var out StatsPrevious
+	var successes int64
+	_ = s.DB.QueryRow(`SELECT COUNT(*),COALESCE(SUM(CASE WHEN status='success' THEN 1 ELSE 0 END),0),COALESCE(SUM(total_tokens),0),COALESCE(SUM(cost_usd),0),COALESCE(AVG(upstream_latency_ms),0),COALESCE(AVG(gateway_latency_ms),0) FROM traces WHERE created_at>=? AND created_at<?`, from.UTC(), to.UTC()).Scan(&out.Requests, &successes, &out.Tokens, &out.Cost, &out.AvgUpstreamMS, &out.AvgGatewayMS)
+	if out.Requests > 0 {
+		out.SuccessRate = 100 * float64(successes) / float64(out.Requests)
+	}
+	return out
 }
 
 func pointLabel(at time.Time, span time.Duration) string {
