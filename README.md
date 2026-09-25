@@ -90,6 +90,19 @@ Smart routing selects between Light, Medium, and Heavy model lanes. Lanes can de
 
 An attempt stays private until its provider answers `2xx`; from then on the response streams straight to the client, so smart routes keep both failover and real streaming. The per-profile timeout only covers the wait for a provider to start answering — a long generation already in progress is never cut off. Responses include `X-Nexa-Routed-Model`, `X-Nexa-Routing-Lane`, and `X-Nexa-Routing-Confidence`. The **Try a prompt** panel previews the decision for any prompt.
 
+## Dashboard
+
+The dashboard is compiled into the binary and makes no external requests — the Inter font (SIL OFL 1.1, `web/fonts`) and every icon are bundled, so it works under the strict Content-Security-Policy and offline.
+
+- **Overview** — a live gateway status card (provider health verified on start-up and every 10 minutes, share of failed requests), metrics with change against the previous period and trend lines, a request chart with errors stacked on top, breakdowns by provider and model, the slowest models by p95, and recent traces refreshed every 5 seconds.
+- **Providers** — provider marks, key verification on save, per-provider requests, error rate and p95 over 24 hours, a searchable pricing table that lists the models you use first, and secondary actions behind a menu.
+- **Smart routing** — a live decision preview for any prompt and, per profile, the Light → Medium → Heavy lanes with their 7-day share of traffic.
+- **Traces** — filters and paging; details open in a side panel with the request timeline (gateway work, Jev decision, attempts, first token) and step through the list with ↑ / ↓.
+- **Playground** — streaming with stop, time / tokens / cost under every reply, side-by-side comparison of two routes, and JSON mode that adds the instruction OpenAI and Groq require.
+- **Access** — dashboard users with roles, per-app API keys, and search once lists grow.
+
+Provider marks come from Simple Icons (CC0) for OpenAI, Anthropic and Google Gemini and Lobe Icons (MIT) for Groq, and are used only to identify connected providers.
+
 ## Security model
 
 - The master key is stored as bcrypt and SHA-256 digests; the 192-bit random key is checked with a constant-time SHA-256 compare so API calls do not pay bcrypt's cost. Its plaintext is shown only on creation or rotation.
