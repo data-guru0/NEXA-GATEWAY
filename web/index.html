@@ -8,6 +8,35 @@
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
+  <!-- Provider marks: Simple Icons (CC0) for OpenAI, Anthropic, Google Gemini; Lobe Icons (MIT) for Groq. Used only to identify connected providers. -->
+  <svg class="icon-sprite" aria-hidden="true">
+    <symbol id="icon-overview" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></symbol>
+    <symbol id="icon-provider" viewBox="0 0 24 24"><path d="M8 12h8M12 8v8"/><rect x="3" y="3" width="6" height="6" rx="2"/><rect x="15" y="3" width="6" height="6" rx="2"/><rect x="9" y="15" width="6" height="6" rx="2"/></symbol>
+    <symbol id="icon-routing" viewBox="0 0 24 24"><circle cx="5" cy="12" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="19" cy="18" r="2"/><path d="M7 12h3c4 0 3-6 7-6M7 12h3c4 0 3 6 7 6"/></symbol>
+    <symbol id="icon-traces" viewBox="0 0 24 24"><path d="M4 19V9m5 10V5m5 14v-7m5 7V3"/></symbol>
+    <symbol id="icon-playground" viewBox="0 0 24 24"><path d="m8 3 1.4 3.6L13 8l-3.6 1.4L8 13 6.6 9.4 3 8l3.6-1.4L8 3Z"/><path d="m17 12 1.1 2.9L21 16l-2.9 1.1L17 20l-1.1-2.9L13 16l2.9-1.1L17 12Z"/></symbol>
+    <symbol id="icon-access" viewBox="0 0 24 24"><circle cx="9" cy="8" r="4"/><path d="M2.5 21a6.5 6.5 0 0 1 13 0M17 11l4 4m0-4-4 4"/></symbol>
+    <symbol id="icon-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 8a7 7 0 0 1 11.5-2.2L20 8M4 16l2.4 2.2A7 7 0 0 0 17.9 16"/></symbol>
+    <symbol id="icon-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+    <symbol id="icon-logout" viewBox="0 0 24 24"><path d="M10 17l5-5-5-5M15 12H3M14 4h5a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-5"/></symbol>
+    <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="icon-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></symbol>
+    <symbol id="icon-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></symbol>
+    <symbol id="icon-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></symbol>
+    <symbol id="icon-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+    <symbol id="icon-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+    <symbol id="icon-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5"/></symbol>
+    <symbol id="icon-chevron-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
+    <symbol id="icon-chevron-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+    <symbol id="icon-chevron-up" viewBox="0 0 24 24"><path d="m18 15-6-6-6 6"/></symbol>
+    <symbol id="icon-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="icon-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="logo-openai" viewBox="0 0 24 24"><path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z"/></symbol>
+    <symbol id="logo-groq" viewBox="0 0 24 24"><path d="M12.036 2c-3.853-.035-7 3-7.036 6.781-.035 3.782 3.055 6.872 6.908 6.907h2.42v-2.566h-2.292c-2.407.028-4.38-1.866-4.408-4.23-.029-2.362 1.901-4.298 4.308-4.326h.1c2.407 0 4.358 1.915 4.365 4.278v6.305c0 2.342-1.944 4.25-4.323 4.279a4.375 4.375 0 01-3.033-1.252l-1.851 1.818A7 7 0 0012.029 22h.092c3.803-.056 6.858-3.083 6.879-6.816v-6.5C18.907 4.963 15.817 2 12.036 2z"/></symbol>
+    <symbol id="logo-gemini" viewBox="0 0 24 24"><path d="M11.04 19.32Q12 21.51 12 24q0-2.49.93-4.68.96-2.19 2.58-3.81t3.81-2.55Q21.51 12 24 12q-2.49 0-4.68-.93a12.3 12.3 0 0 1-3.81-2.58 12.3 12.3 0 0 1-2.58-3.81Q12 2.49 12 0q0 2.49-.96 4.68-.93 2.19-2.55 3.81a12.3 12.3 0 0 1-3.81 2.58Q2.49 12 0 12q2.49 0 4.68.96 2.19.93 3.81 2.55t2.55 3.81"/></symbol>
+    <symbol id="logo-anthropic" viewBox="0 0 24 24"><path d="M17.3041 3.541h-3.6718l6.696 16.918H24Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456Z"/></symbol>
+    <symbol id="logo-custom" viewBox="0 0 32 32"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="16" r="3"/><circle cx="24" cy="8" r="3"/><circle cx="24" cy="24" r="3"/><path d="M11 16h4c4 0 4-8 6-8M15 16c4 0 4 8 6 8"/></g></symbol>
+  </svg>
   <div id="toast-stack" class="toast-stack" aria-live="polite"></div>
 
   <main id="login-view" class="login-shell">
@@ -34,7 +63,7 @@
 
     <section class="login-panel">
       <form id="login-form" class="login-form">
-        <div class="form-index">01 / ACCESS</div>
+        <div class="form-index">Secure access</div>
         <h2>Enter the control room</h2>
         <p>Use the master key printed during first startup, or a local Nexa account.</p>
         <div class="segmented" role="tablist">
@@ -50,7 +79,7 @@
           <label class="field"><span>PASSWORD</span><input id="login-password" type="password" autocomplete="current-password" placeholder="Your password"><button class="reveal" type="button" data-reveal="login-password">SHOW</button></label>
         </div>
         <div id="login-error" class="form-error hidden"></div>
-        <button class="primary-action" type="submit"><span>Open dashboard</span><b>↗</b></button>
+        <button class="primary-action" type="submit"><span>Open dashboard</span><svg class="button-icon"><use href="#icon-arrow"/></svg></button>
         <div class="login-meta"><span><i></i> LOCAL SESSION</span><span id="version-label">NEXA v0.1.0</span></div>
       </form>
     </section>
@@ -60,94 +89,98 @@
     <aside class="sidebar">
       <a class="sidebar-brand" href="#overview" aria-label="Nexa Gateway home"><div class="brand-mark small"><span>N</span><i></i></div><div><b>NEXA</b><small>GATEWAY</small></div></a>
       <nav class="main-nav" aria-label="Main navigation">
-        <a href="#overview" data-route="overview" class="active"><span class="nav-icon">⌁</span><b>Overview</b><small>01</small></a>
-        <a href="#providers" data-route="providers"><span class="nav-icon">◇</span><b>Providers</b><small>02</small></a>
-        <a href="#routing" data-route="routing"><span class="nav-icon">⇌</span><b>Smart Routing</b><small>03</small></a>
-        <a href="#traces" data-route="traces"><span class="nav-icon">⌇</span><b>Traces</b><small>04</small></a>
-        <a href="#playground" data-route="playground"><span class="nav-icon">↗</span><b>Playground</b><small>05</small></a>
-        <a href="#team" data-route="team"><span class="nav-icon">◎</span><b>Access</b><small>06</small></a>
+        <a href="#overview" data-route="overview" class="active"><svg class="nav-icon"><use href="#icon-overview"/></svg><b>Overview</b></a>
+        <a href="#providers" data-route="providers"><svg class="nav-icon"><use href="#icon-provider"/></svg><b>Providers</b></a>
+        <a href="#routing" data-route="routing"><svg class="nav-icon"><use href="#icon-routing"/></svg><b>Smart Routing</b></a>
+        <a href="#traces" data-route="traces"><svg class="nav-icon"><use href="#icon-traces"/></svg><b>Traces</b></a>
+        <a href="#playground" data-route="playground"><svg class="nav-icon"><use href="#icon-playground"/></svg><b>Playground</b></a>
+        <a href="#team" data-route="team"><svg class="nav-icon"><use href="#icon-access"/></svg><b>Access</b></a>
       </nav>
       <div class="sidebar-bottom">
-        <div class="system-pulse"><span class="pulse-orbit"><i></i></span><div><b>Gateway online</b><small id="sidebar-requests">0 requests / 24h</small></div></div>
-        <button id="logout-button" class="logout-button"><span>Sign out</span><span>→</span></button>
+        <div class="sidebar-activity"><span>Last 24 hours</span><b id="sidebar-requests">0 requests</b></div>
+        <div class="sidebar-links"><span id="sidebar-version">Nexa</span><a href="https://github.com/data-guru0/LLM-GATEWAY" target="_blank" rel="noreferrer">Docs</a><a href="https://github.com/data-guru0/LLM-GATEWAY/releases" target="_blank" rel="noreferrer">Changelog</a></div>
+        <button id="logout-button" class="logout-button"><span>Sign out</span><svg class="button-icon"><use href="#icon-logout"/></svg></button>
       </div>
     </aside>
 
     <main class="workspace">
       <header class="topbar">
-        <button id="menu-toggle" class="menu-toggle" aria-label="Toggle menu">☰</button>
+        <button id="menu-toggle" class="menu-toggle" aria-label="Toggle menu"><svg><use href="#icon-menu"/></svg></button>
         <div class="breadcrumb"><span>NEXA</span><i>/</i><b id="page-crumb">OVERVIEW</b></div>
         <div class="top-actions">
-          <a class="endpoint-chip" href="#playground"><i></i><span id="endpoint-host">localhost</span><b>/v1</b></a>
-          <button id="refresh-button" class="icon-button" title="Refresh data">↻</button>
+          <a class="endpoint-chip" href="#playground"><span id="endpoint-host">localhost</span><b>/v1</b></a>
+          <button id="refresh-button" class="icon-button" title="Refresh data" aria-label="Refresh data"><svg><use href="#icon-refresh"/></svg></button>
           <div class="user-chip"><span id="user-initial">M</span><div><b id="user-name">Master administrator</b><small id="user-role">OWNER</small></div></div>
         </div>
       </header>
 
       <section id="page-overview" class="page active">
         <div class="page-head">
-          <div><div class="section-code">01 — SYSTEM PULSE</div><h1>Everything flowing<br><em>through one place.</em></h1></div>
-          <div class="overview-head-side"><div class="compact-status"><i></i><div><span>GATEWAY</span><b>Operational</b></div></div><div class="head-clock"><span id="clock-time">00:00:00</span><small>LOCAL / <b id="clock-zone">IST</b></small></div></div>
+          <div><h1>Overview</h1><p>Traffic, reliability, latency, and spend across the gateway.</p></div><span id="overview-freshness" class="freshness">Waiting for data</span>
         </div>
+        <article id="gateway-status" class="status-card" aria-live="polite"></article>
         <div class="metric-grid">
-          <article class="metric-card acid"><header><span>REQUESTS</span><b id="stat-range-label">24H</b></header><strong id="stat-requests">0</strong><footer><span class="mini-spark" id="requests-spark"></span><span>gateway traffic</span></footer></article>
-          <article class="metric-card"><header><span>SUCCESS RATE</span><b>HEALTH</b></header><strong id="stat-success">100<sup>%</sup></strong><footer><span class="status-mark good"></span><span id="success-caption">All systems nominal</span></footer></article>
-          <article class="metric-card"><header><span>TOKENS</span><b>SELECTED</b></header><strong id="stat-tokens">0</strong><footer><span>↗</span><span>input + output</span></footer></article>
-          <article class="metric-card dark"><header><span>SPEND</span><b>EST.</b></header><strong id="stat-cost">$0.00</strong><footer><span>◌</span><span>built-in + custom model pricing</span></footer></article>
-          <article class="metric-card"><header><span>PROVIDER LATENCY</span><b>AVG</b></header><strong id="stat-provider-latency">—</strong><footer><span>→</span><span id="stat-latency-pct">end-to-end p50 — · p95 —</span></footer></article>
-          <article class="metric-card"><header><span>GATEWAY OVERHEAD</span><b>AVG</b></header><strong id="stat-gateway-latency">—</strong><footer><span>⊕</span><span>auth, routing and Nexa processing</span></footer></article>
+          <article class="metric-card"><header><span>REQUESTS</span><b id="stat-range-label">24H</b></header><strong id="stat-requests">0</strong><footer><span class="mini-spark" id="requests-spark"></span><span class="metric-delta" id="requests-delta">No previous data</span></footer></article>
+          <article class="metric-card"><header><span>SUCCESS RATE</span><b>HEALTH</b></header><strong id="stat-success">100<sup>%</sup></strong><footer><span class="mini-spark" id="success-spark"></span><span class="metric-delta" id="success-delta">No previous data</span><span class="status-mark good"></span><span id="success-caption">All systems nominal</span></footer></article>
+          <article class="metric-card"><header><span>TOKENS</span><b>SELECTED</b></header><strong id="stat-tokens">0</strong><footer><span class="mini-spark" id="tokens-spark"></span><span class="metric-delta" id="tokens-delta">No previous data</span></footer></article>
+          <article class="metric-card"><header><span>SPEND</span><b>EST.</b></header><strong id="stat-cost">$0.00</strong><footer><span class="mini-spark" id="cost-spark"></span><span class="metric-delta" id="cost-delta">No previous data</span></footer></article>
+          <article class="metric-card"><header><span>PROVIDER LATENCY</span><b>AVG</b></header><strong id="stat-provider-latency">—</strong><footer><span class="mini-spark" id="provider-latency-spark"></span><span class="metric-delta inverse" id="provider-latency-delta">No previous data</span><span id="stat-latency-pct">p50 — · p95 —</span></footer></article>
+          <article class="metric-card"><header><span>GATEWAY OVERHEAD</span><b>AVG</b></header><strong id="stat-gateway-latency">—</strong><footer><span class="mini-spark" id="gateway-latency-spark"></span><span class="metric-delta inverse" id="gateway-latency-delta">No previous data</span></footer></article>
         </div>
         <article class="panel traffic-panel">
           <header class="panel-head chart-head"><div><span class="panel-kicker" id="traffic-period">TRAFFIC / 24 HOURS</span><h2>Request velocity</h2></div><div class="chart-head-tools"><div class="legend"><span><i class="ok"></i>Requests</span><span><i class="err"></i>Errors</span></div><label class="chart-range-select"><span>PERIOD</span><select id="chart-range"><option value="5m">Past 5 minutes</option><option value="30m">Past 30 minutes</option><option value="1h">Past hour</option><option value="6h">Past 6 hours</option><option value="24h" selected>Past 24 hours</option><option value="7d">Past 7 days</option><option value="30d">Past 30 days</option><option value="custom">Custom range</option></select></label></div></header>
           <form id="custom-range" class="custom-range hidden"><label>FROM<input id="chart-from" type="datetime-local"></label><span>→</span><label>TO<input id="chart-to" type="datetime-local"></label><button type="submit">Apply range</button></form>
           <div id="traffic-chart" class="traffic-chart"><div class="chart-empty">Waiting for the first request.</div></div>
         </article>
+        <div class="breakdown-grid">
+          <article class="panel breakdown-panel"><header class="panel-head"><div><span class="panel-kicker">SELECTED PERIOD</span><h2>Requests by provider</h2></div></header><div id="provider-breakdown" class="breakdown-list"></div></article>
+          <article class="panel breakdown-panel"><header class="panel-head"><div><span class="panel-kicker">SELECTED PERIOD</span><h2>Cost by model</h2></div></header><div id="model-cost-breakdown" class="breakdown-list"></div></article>
+          <article class="panel breakdown-panel"><header class="panel-head"><div><span class="panel-kicker">P95 LATENCY</span><h2>Slowest models</h2></div></header><div id="slow-model-breakdown" class="breakdown-list"></div></article>
+        </div>
         <article class="panel recent-panel">
-          <header class="panel-head"><div><span class="panel-kicker"><span class="live-dot small"></span> LIVE JOURNAL · UPDATES EVERY 5S</span><h2>Recent traces</h2></div><a href="#traces" class="text-link">Explore all traces <span>→</span></a></header>
+          <header class="panel-head"><div><span class="panel-kicker">UPDATES EVERY 5S</span><h2>Recent traces</h2></div><a href="#traces" class="text-link">View all traces</a></header>
           <div class="table-wrap"><table><thead><tr><th>STATUS</th><th>PROVIDER</th><th>MODEL</th><th>TOKENS</th><th>LATENCY</th><th>COST</th><th>TIME</th></tr></thead><tbody id="recent-traces"></tbody></table></div>
         </article>
       </section>
 
       <section id="page-providers" class="page">
-        <div class="page-title-row"><div><div class="section-code">02 — CONNECTIONS</div><h1>Provider fabric</h1><p>Credentials are AES-256 encrypted before they touch disk. Keys are verified every time you save.</p></div><button class="primary-action compact" data-open-provider data-admin><span>Add provider</span><b>＋</b></button></div>
+        <div class="page-title-row"><div><h1>Providers</h1><p>Manage encrypted provider credentials and available model routes.</p></div><button class="primary-action compact" data-open-provider data-admin><span>Add provider</span><svg class="button-icon"><use href="#icon-plus"/></svg></button></div>
         <div id="provider-grid" class="provider-grid"></div>
-        <div class="integration-note"><span>ROUTING CONVENTION</span><div><code>provider-slug/model-name</code><button data-copy="provider-slug/model-name">COPY</button></div><p>Use this model value with any OpenAI SDK pointed at Nexa. A single configured provider also accepts bare model names, including ones that contain a slash.</p></div>
+        <div class="integration-note"><span>Model route format</span><div><code>provider-slug/model-name</code><button data-copy="provider-slug/model-name" aria-label="Copy model route"><svg class="button-icon"><use href="#icon-copy"/></svg>Copy</button></div><p>Use this value with any OpenAI SDK pointed at Nexa.</p></div>
         <article class="panel pricing-panel">
           <header class="panel-head"><div><span class="panel-kicker">COST ESTIMATES</span><h2>Model pricing</h2></div><span class="panel-note">USD per 1M tokens · end a model with <code>*</code> to match a prefix</span></header>
+          <div class="pricing-toolbar"><label><svg><use href="#icon-search"/></svg><input id="price-search" type="search" placeholder="Search model pricing…" aria-label="Search model pricing"></label><button id="price-expand" class="outline-button" type="button">Show full catalog</button></div>
           <form id="price-form" class="price-form" data-admin><input id="price-model" required placeholder="Model id, e.g. gpt-5.5 or claude-*"><input id="price-input" type="number" min="0" step="0.0001" required placeholder="Input $/1M"><input id="price-output" type="number" min="0" step="0.0001" required placeholder="Output $/1M"><button type="submit">SAVE PRICE</button></form>
           <div class="table-wrap"><table><thead><tr><th>MODEL</th><th>INPUT / 1M</th><th>OUTPUT / 1M</th><th>SOURCE</th><th></th></tr></thead><tbody id="price-table"></tbody></table></div>
         </article>
       </section>
 
       <section id="page-routing" class="page">
-        <div class="page-title-row"><div><div class="section-code">03 — DECISION FABRIC</div><h1>Smart routing</h1><p>Match every prompt to the right model lane through one resilient virtual model.</p></div><button id="new-routing-profile" class="primary-action compact" data-admin><span>New profile</span><b>＋</b></button></div>
-        <div class="routing-hero">
-          <div class="routing-orbit" aria-hidden="true"><span>PROMPT</span><i></i><b>N</b><i></i><span>BEST ROUTE</span></div>
-          <div><span class="panel-kicker">ONE DROP-IN MODEL</span><h2>Call <code>smart</code>. Nexa decides the rest.</h2><p>Jev reads the conversation, measures its difficulty, and Nexa sends it to the matching model lane — streaming straight through, with real provider fallbacks if a route fails before it answers.</p></div>
-          <button data-copy-snippet="smart">COPY SNIPPET</button>
-        </div>
+        <div class="page-title-row"><div><h1>Smart routing</h1><p>Map prompt difficulty to model lanes and configure resilient fallbacks.</p></div><button id="new-routing-profile" class="primary-action compact" data-admin><span>New profile</span><svg class="button-icon"><use href="#icon-plus"/></svg></button></div>
         <article class="panel route-preview">
           <header class="panel-head"><div><span class="panel-kicker">LIVE DECISION PREVIEW</span><h2>Try a prompt</h2></div></header>
-          <form id="route-preview-form" class="route-preview-form"><select id="preview-profile" aria-label="Routing profile"></select><textarea id="preview-prompt" rows="2" required placeholder="Paste a prompt to see which lane Jev picks…"></textarea><label class="check"><input type="checkbox" id="preview-tools"> tools</label><label class="check"><input type="checkbox" id="preview-vision"> vision</label><button type="submit">EVALUATE ↗</button></form>
+          <form id="route-preview-form" class="route-preview-form"><select id="preview-profile" aria-label="Routing profile"></select><textarea id="preview-prompt" rows="4" required placeholder="Paste a prompt to see which lane Jev picks…"></textarea><label class="check"><input type="checkbox" id="preview-tools"> tools</label><label class="check"><input type="checkbox" id="preview-vision"> vision</label><button type="submit">Evaluate</button></form>
           <div id="route-preview-result" class="route-preview-result hidden"></div>
         </article>
         <div id="routing-profiles" class="routing-profiles"></div>
       </section>
 
       <section id="page-traces" class="page">
-        <div class="page-title-row"><div><div class="section-code">04 — OBSERVABILITY</div><h1>Trace journal</h1><p>The full story of every request, from prompt to response — including rejected ones.</p></div><div class="trace-count"><strong id="trace-total">0</strong><span>RECORDED</span></div></div>
-        <div class="filter-bar"><form id="trace-search-form" class="search-field" role="search"><button class="search-submit" type="submit" aria-label="Search traces" title="Search">⌕</button><input id="trace-search" type="search" autocomplete="off" aria-label="Search traces" placeholder="Search prompts, responses, models, providers…"><button id="trace-search-clear" class="search-clear hidden" type="button" aria-label="Clear trace search" title="Clear search">×</button></form><div class="filter-tabs"><button class="active" data-status="all">All</button><button data-status="success">Success</button><button data-status="error">Errors</button></div><button id="trace-refresh" class="outline-button">Refresh ↻</button></div>
+        <div class="page-title-row"><div><h1>Traces</h1><p>Inspect requests, responses, routing decisions, latency, and cost.</p></div><div class="trace-head-meta"><span id="trace-freshness" class="freshness">Waiting for data</span><div class="trace-count"><strong id="trace-total">0</strong><span>RECORDED</span></div></div></div>
+        <div class="filter-bar"><form id="trace-search-form" class="search-field" role="search"><button class="search-submit" type="submit" aria-label="Search traces" title="Search"><svg><use href="#icon-search"/></svg></button><input id="trace-search" type="search" autocomplete="off" aria-label="Search traces" placeholder="Search prompts, responses, models, providers…"><button id="trace-search-clear" class="search-clear hidden" type="button" aria-label="Clear trace search" title="Clear search">×</button></form><div class="filter-tabs"><button class="active" data-status="all">All</button><button data-status="success">Success</button><button data-status="error">Errors</button></div><button id="trace-refresh" class="outline-button"><svg class="button-icon"><use href="#icon-refresh"/></svg>Refresh</button></div>
         <div class="filter-bar trace-filters"><label><span>PROVIDER</span><select id="trace-provider"><option value="">All providers</option></select></label><label><span>MODEL</span><input id="trace-model" placeholder="Any model"></label><label><span>FROM</span><input id="trace-from" type="datetime-local"></label><label><span>TO</span><input id="trace-to" type="datetime-local"></label><button id="trace-filter-clear" class="outline-button" type="button">Clear filters</button></div>
-        <div class="panel trace-table-panel"><div class="table-wrap"><table class="trace-table"><thead><tr><th>OUTCOME</th><th>ROUTE</th><th>MODEL</th><th>TOKENS</th><th>LATENCY</th><th>COST</th><th>CREATED</th><th></th></tr></thead><tbody id="trace-table"></tbody></table></div><button id="trace-more" class="load-more hidden" type="button">LOAD MORE</button></div>
+        <div class="panel trace-table-panel"><div class="table-wrap"><table class="trace-table"><thead><tr><th>OUTCOME</th><th>ROUTE</th><th>MODEL</th><th>LANE</th><th>API KEY</th><th>TOKENS</th><th>LATENCY</th><th>COST</th><th>CREATED</th></tr></thead><tbody id="trace-table"></tbody></table></div><button id="trace-more" class="load-more hidden" type="button">LOAD MORE</button></div>
       </section>
 
       <section id="page-playground" class="page playground-page">
-        <div class="page-title-row"><div><div class="section-code">05 — LIVE LAB</div><h1>Playground</h1><p>Send a real, streamed request through the exact same gateway path as your application.</p></div><div class="lab-badge"><i></i>LIVE TRAFFIC</div></div>
+        <div class="page-title-row"><div><h1>Playground</h1><p>Send a real request through the same gateway path as your application.</p></div></div>
         <div class="playground-shell">
           <aside class="play-controls">
             <div class="control-heading"><span>RUN CONFIGURATION</span><b>⌘↵ to send</b></div>
             <label><span>PROVIDER</span><select id="play-provider"></select></label>
-            <label><span>MODEL <b id="model-count"></b></span><div class="model-input-row"><select id="play-model"></select><button id="reload-models" title="Reload chat-capable models">↻</button></div></label>
+            <label><span>MODEL <b id="model-count"></b></span><div class="model-input-row"><select id="play-model"></select><button id="reload-models" title="Reload chat-capable models" aria-label="Reload chat-capable models"><svg class="button-icon"><use href="#icon-refresh"/></svg></button></div></label>
+            <div class="switch-group"><label class="switch-row"><span class="switch-copy"><b>Compare two routes</b><small>Sends two billable requests side by side</small></span><input id="play-compare" class="switch-input" type="checkbox" role="switch"><span class="switch" aria-hidden="true"><i></i></span></label></div>
+            <div id="compare-controls" class="compare-controls hidden"><label><span>COMPARE PROVIDER</span><select id="compare-provider"></select></label><label><span>COMPARE MODEL</span><div class="model-input-row"><select id="compare-model"></select><button id="reload-compare-models" type="button" title="Reload comparison models" aria-label="Reload comparison models"><svg class="button-icon"><use href="#icon-refresh"/></svg></button></div></label></div>
             <label><span>SYSTEM INSTRUCTION</span><textarea id="play-system" rows="4" placeholder="You are a concise, thoughtful assistant.">You are a concise, thoughtful assistant.</textarea></label>
             <label><span>TEMPERATURE <b id="temperature-value">0.7</b></span><input id="play-temperature" type="range" min="0" max="2" step="0.1" value="0.7"></label>
             <label><span>TOP P <b id="top-p-value">1</b></span><input id="play-top-p" type="range" min="0" max="1" step="0.05" value="1"></label>
@@ -162,20 +195,20 @@
           </aside>
           <div class="chat-stage">
             <div class="chat-top"><div><span class="live-dot"></span><b id="chat-route">NO ROUTE SELECTED</b></div><span id="chat-metrics">READY</span></div>
-            <div id="chat-messages" class="chat-messages"><div class="chat-welcome"><div class="welcome-glyph">N</div><h2>Test the route.</h2><p>Select a provider and model, then send a message. This is a real request and will appear in Traces.</p></div></div>
-            <form id="chat-form" class="composer"><textarea id="chat-input" rows="2" placeholder="Ask the model something…" required></textarea><button type="submit" id="chat-send"><span>SEND</span><b>↗</b></button><small>⌘ ENTER</small></form>
+            <div id="chat-messages" class="chat-messages"><div class="chat-welcome"><div class="welcome-glyph">N</div><h2>Start a conversation</h2><p>Select a provider and model, then send a message. Requests appear automatically in Traces.</p></div></div>
+            <form id="chat-form" class="composer"><textarea id="chat-input" rows="2" placeholder="Ask the model something…" required></textarea><button type="submit" id="chat-send"><span>Send</span><svg class="button-icon"><use href="#icon-arrow"/></svg></button><small>⌘ ENTER</small></form>
           </div>
         </div>
       </section>
 
       <section id="page-team" class="page">
-        <div class="page-title-row"><div><div class="section-code">06 — ACCESS CONTROL</div><h1>People &amp; keys</h1><p>Invite local operators and give every application its own revocable key.</p></div><div class="title-actions"><button id="change-password" class="outline-button hidden" type="button">Change my password</button><button class="primary-action compact" data-open-user data-admin><span>Create user</span><b>＋</b></button></div></div>
+        <div class="page-title-row"><div><h1>Access</h1><p>Manage dashboard users, application keys, and owner credentials.</p></div><div class="title-actions"><button id="change-password" class="outline-button hidden" type="button">Change my password</button><button class="primary-action compact" data-open-user data-admin><span>Create user</span><svg class="button-icon"><use href="#icon-plus"/></svg></button></div></div>
         <div class="access-grid">
-          <article class="panel"><header class="panel-head"><div><span class="panel-kicker">LOCAL ACCOUNTS</span><h2>Dashboard users</h2></div><span class="panel-note">Admins manage everything · members view and use the playground</span></header><div id="users-list" class="users-list"></div></article>
-          <article class="master-card"><div class="key-art"><span>KEY / ROOT</span><b>⌁</b><i></i></div><div><span class="panel-kicker">MASTER CREDENTIAL</span><h2>Root of trust</h2><p>The master key signs in the owner and can call the API. Rotating it immediately invalidates the previous value and signs out other master sessions. Prefer per-app API keys for applications.</p><button id="rotate-key" class="danger-button" data-master>Rotate master key</button></div></article>
+          <article class="panel"><header class="panel-head"><div><span class="panel-kicker">LOCAL ACCOUNTS</span><h2>Dashboard users</h2></div><label class="panel-search hidden"><svg><use href="#icon-search"/></svg><input id="user-search" type="search" placeholder="Search users" aria-label="Search users"></label></header><div id="users-list" class="users-list"></div></article>
+          <article class="master-card"><div><span class="panel-kicker">OWNER CREDENTIAL</span><h2>Master key</h2><p>Signs in the owner and authenticates API calls. Rotating it immediately invalidates the previous value and other master sessions.</p><button id="rotate-key" class="danger-button" data-master>Rotate master key</button></div></article>
         </div>
         <article class="panel keys-panel">
-          <header class="panel-head"><div><span class="panel-kicker">APPLICATION ACCESS</span><h2>API keys</h2></div><form id="api-key-form" class="inline-form" data-admin><input id="api-key-name" required maxlength="60" placeholder="Key name, e.g. billing-service"><button type="submit">CREATE KEY ＋</button></form></header>
+          <header class="panel-head"><div><span class="panel-kicker">APPLICATION ACCESS</span><h2>API keys</h2></div><div class="key-head-actions"><label class="panel-search hidden"><svg><use href="#icon-search"/></svg><input id="key-search" type="search" placeholder="Search keys" aria-label="Search API keys"></label><form id="api-key-form" class="inline-form" data-admin><input id="api-key-name" required maxlength="60" placeholder="Key name, e.g. billing-service"><button type="submit">CREATE KEY ＋</button></form></div></header>
           <div class="table-wrap"><table><thead><tr><th>NAME</th><th>KEY</th><th>CREATED</th><th>LAST USED</th><th></th></tr></thead><tbody id="api-key-table"></tbody></table></div>
         </article>
         <article class="panel sdk-panel"><header><span class="panel-kicker">CONNECT YOUR APP</span><div class="code-tabs"><button class="active" data-code="python">PYTHON</button><button data-code="javascript">JAVASCRIPT</button><button data-code="curl">CURL</button></div></header><pre id="sdk-code"></pre><button id="copy-sdk" class="copy-code">COPY</button></article>
@@ -185,14 +218,14 @@
 
   <dialog id="provider-dialog" class="modal">
     <form id="provider-form" method="dialog">
-      <header><div><span class="section-code">CONNECTION / NEW</span><h2 id="provider-dialog-title">Add provider</h2></div><button type="button" data-close-dialog>×</button></header>
+      <header><div><span class="section-code">CONNECTION</span><h2 id="provider-dialog-title">Add provider</h2></div><button type="button" data-close-dialog aria-label="Close"><svg class="button-icon"><use href="#icon-close"/></svg></button></header>
       <input id="provider-id" type="hidden">
       <div class="provider-types">
-        <label><input type="radio" name="provider-type" value="openai" checked><span><b>OA</b>OpenAI</span></label>
-        <label><input type="radio" name="provider-type" value="groq"><span><b>GQ</b>Groq</span></label>
-        <label><input type="radio" name="provider-type" value="gemini"><span><b>GM</b>Gemini</span></label>
-        <label><input type="radio" name="provider-type" value="anthropic"><span><b>AN</b>Anthropic</span></label>
-        <label><input type="radio" name="provider-type" value="custom"><span><b>CU</b>Custom</span></label>
+        <label><input type="radio" name="provider-type" value="openai" checked><span><b><svg class="brand-logo" aria-hidden="true"><use href="#logo-openai"/></svg></b>OpenAI</span></label>
+        <label><input type="radio" name="provider-type" value="groq"><span><b><svg class="brand-logo" aria-hidden="true"><use href="#logo-groq"/></svg></b>Groq</span></label>
+        <label><input type="radio" name="provider-type" value="gemini"><span><b><svg class="brand-logo" aria-hidden="true"><use href="#logo-gemini"/></svg></b>Gemini</span></label>
+        <label><input type="radio" name="provider-type" value="anthropic"><span><b><svg class="brand-logo" aria-hidden="true"><use href="#logo-anthropic"/></svg></b>Anthropic</span></label>
+        <label><input type="radio" name="provider-type" value="custom"><span><b><svg class="brand-logo" aria-hidden="true"><use href="#logo-custom"/></svg></b>Custom</span></label>
       </div>
       <div class="form-grid"><label class="field"><span>DISPLAY NAME</span><input id="provider-name" required placeholder="Production OpenAI"></label><label class="field"><span>ROUTING SLUG</span><input id="provider-slug" required placeholder="openai-prod"></label></div>
       <label class="field"><span>BASE URL</span><input id="provider-url" type="url" placeholder="Filled automatically"><small id="provider-url-note" class="provider-field-note">Provider endpoint is filled automatically.</small></label>
@@ -200,18 +233,18 @@
       <label class="field"><span>EXTRA HEADERS <b id="provider-headers-status"></b></span><textarea id="provider-headers" rows="2" placeholder="Optional, one per line — e.g. HTTP-Referer: https://myapp.example"></textarea><small class="provider-field-note">Sent with every upstream request and encrypted at rest. Leave untouched to keep saved headers; clear the box to remove them.</small></label>
       <label class="toggle-row"><span><b>Connection enabled</b><small>Allow live traffic to use this route</small></span><input id="provider-enabled" type="checkbox" checked><i></i></label>
       <div id="provider-error" class="form-error hidden"></div>
-      <footer><button type="button" class="outline-button" data-close-dialog>Cancel</button><button type="submit" class="primary-action compact"><span>Save &amp; verify</span><b>↗</b></button></footer>
+      <footer><button type="button" class="outline-button" data-close-dialog>Cancel</button><button type="submit" class="primary-action compact"><span>Save &amp; verify</span><svg class="button-icon"><use href="#icon-arrow"/></svg></button></footer>
     </form>
   </dialog>
 
   <dialog id="routing-dialog" class="modal routing-modal">
     <form id="routing-form" method="dialog">
-      <header><div><span class="section-code">ROUTING / PROFILE</span><h2 id="routing-dialog-title">Create smart profile</h2></div><button type="button" data-close-dialog>×</button></header>
+      <header><div><span class="section-code">ROUTING PROFILE</span><h2 id="routing-dialog-title">Create smart profile</h2></div><button type="button" data-close-dialog aria-label="Close"><svg class="button-icon"><use href="#icon-close"/></svg></button></header>
       <input id="routing-id" type="hidden">
       <div class="routing-form-grid"><label class="field"><span>PROFILE NAME</span><input id="routing-name" required placeholder="Production Autopilot"></label><label class="field"><span>ROUTING SLUG</span><input id="routing-slug" required placeholder="production"></label></div>
-      <section class="router-section"><div class="router-section-head"><div><b>01 / DECISION ENGINE · JEV BY TYPESAFE</b><p>Jev reads the system prompt and the latest turns, measures difficulty, and returns a confidence score for every decision.</p></div></div><label id="jev-key-field" class="field"><span>JEV API KEY <b id="jev-key-status"></b></span><input id="routing-jev-key" type="password" placeholder="Uses JEV_API_KEY when available"><small class="provider-field-note">Encrypted at rest. Leave blank to keep the saved or environment key.</small></label></section>
-      <section class="router-section ladder-section"><div class="router-section-head"><div><b>02 / MODEL LADDER</b><p>Assign a live provider model to each difficulty lane. Nexa tries the best-matched lane first, then moves through real fallbacks if needed. Untick a capability a model lacks so requests needing it skip that lane.</p></div><button id="add-routing-target" type="button">＋ ADD LANE</button></div><div class="ladder-guide"><span><i>01</i><b>PROVIDER</b><small>Connected route</small></span><span><i>02</i><b>MODEL</b><small>Live catalog</small></span><span><i>03</i><b>LANE</b><small>Prompt difficulty</small></span></div><div id="routing-targets" class="routing-targets"></div></section>
-      <section class="router-section"><div class="router-section-head"><div><b>03 / FALLBACK &amp; LIMITS</b><p>What happens when Jev is unsure or unavailable, and how long a provider may take to start answering.</p></div></div>
+      <section class="router-section"><div class="router-section-head"><div><b>DECISION ENGINE · JEV BY TYPESAFE</b><p>Jev reads the system prompt and the latest turns, measures difficulty, and returns a confidence score for every decision.</p></div></div><label id="jev-key-field" class="field"><span>JEV API KEY <b id="jev-key-status"></b></span><input id="routing-jev-key" type="password" placeholder="Uses JEV_API_KEY when available"><small class="provider-field-note">Encrypted at rest. Leave blank to keep the saved or environment key.</small></label></section>
+      <section class="router-section ladder-section"><div class="router-section-head"><div><b>MODEL LADDER</b><p>Assign a live provider model to each difficulty lane. Nexa tries the best-matched lane first, then moves through real fallbacks if needed. Untick a capability a model lacks so requests needing it skip that lane.</p></div><button id="add-routing-target" type="button">Add lane</button></div><div class="ladder-guide"><span><b>PROVIDER</b><small>Connected route</small></span><span><b>MODEL</b><small>Live catalog</small></span><span><b>LANE</b><small>Prompt difficulty</small></span></div><div id="routing-targets" class="routing-targets"></div></section>
+      <section class="router-section"><div class="router-section-head"><div><b>FALLBACK &amp; LIMITS</b><p>What happens when Jev is unsure or unavailable, and how long a provider may take to start answering.</p></div></div>
         <div class="settings-grid">
           <label class="field"><span>IF JEV IS UNAVAILABLE</span><select id="routing-fallback"><option value="low">Use LIGHT lane</option><option value="medium" selected>Use MEDIUM lane</option><option value="high">Use HEAVY lane</option></select></label>
           <label class="field"><span>ESCALATE BELOW CONFIDENCE</span><input id="routing-threshold" type="number" min="0" max="1" step="0.05" value="0.6"></label>
@@ -221,15 +254,15 @@
         <small class="provider-field-note">Below the confidence threshold Nexa moves one lane up to protect answer quality (0 turns this off). The timeout only covers the wait for a provider to respond — a long answer that has started is never cut off.</small>
       </section>
       <div id="routing-error" class="form-error hidden"></div>
-      <footer><button type="button" class="outline-button" data-close-dialog>Cancel</button><button type="submit" class="primary-action compact"><span>Save profile</span><b>↗</b></button></footer>
+      <footer><button type="button" class="outline-button" data-close-dialog>Cancel</button><button type="submit" class="primary-action compact"><span>Save profile</span><svg class="button-icon"><use href="#icon-arrow"/></svg></button></footer>
     </form>
   </dialog>
 
-  <dialog id="user-dialog" class="modal small-modal"><form id="user-form" method="dialog"><header><div><span class="section-code">ACCESS / NEW</span><h2>Create user</h2></div><button type="button" data-close-dialog>×</button></header><label class="field"><span>USERNAME</span><input id="new-username" minlength="3" required placeholder="operator"></label><label class="field"><span>PASSWORD</span><input id="new-password" type="password" minlength="8" required placeholder="At least 8 characters"></label><label class="field"><span>ROLE</span><select id="new-role"><option value="member">Member — view &amp; playground</option><option value="admin">Administrator — full control</option></select></label><div id="user-error" class="form-error hidden"></div><footer><button type="button" class="outline-button" data-close-dialog>Cancel</button><button type="submit" class="primary-action compact"><span>Create user</span><b>＋</b></button></footer></form></dialog>
+  <dialog id="user-dialog" class="modal small-modal"><form id="user-form" method="dialog"><header><div><span class="section-code">ACCESS</span><h2>Create user</h2></div><button type="button" data-close-dialog aria-label="Close"><svg class="button-icon"><use href="#icon-close"/></svg></button></header><label class="field"><span>USERNAME</span><input id="new-username" minlength="3" required placeholder="operator"></label><label class="field"><span>PASSWORD</span><input id="new-password" type="password" minlength="8" required placeholder="At least 8 characters"></label><label class="field"><span>ROLE</span><select id="new-role"><option value="member">Member — view &amp; playground</option><option value="admin">Administrator — full control</option></select></label><div id="user-error" class="form-error hidden"></div><footer><button type="button" class="outline-button" data-close-dialog>Cancel</button><button type="submit" class="primary-action compact"><span>Create user</span><svg class="button-icon"><use href="#icon-plus"/></svg></button></footer></form></dialog>
 
-  <dialog id="trace-dialog" class="modal trace-modal"><div><header><div><span class="section-code">TRACE / DETAIL</span><h2 id="trace-dialog-title">Request trace</h2></div><div class="trace-modal-tools"><button type="button" class="outline-button" id="trace-replay">Open in Playground</button><button type="button" class="outline-button" id="trace-curl">Copy as cURL</button><button type="button" data-close-dialog>×</button></div></header><div class="trace-modebar"><div><span>DISPLAY MODE</span><p id="trace-view-description">Conversation formatted for reading</p></div><div class="view-tabs"><button class="active" data-trace-view="readable">Readable</button><button data-trace-view="json">Raw JSON</button></div></div><div id="trace-detail"></div></div></dialog>
-  <dialog id="key-dialog" class="modal small-modal"><div><header><div><span class="section-code">SAVE THIS NOW</span><h2 id="key-dialog-title">New master key</h2></div><button type="button" data-close-dialog>×</button></header><p id="key-dialog-note">This value will not be shown again. The previous master key no longer works.</p><div class="key-reveal"><code id="new-master-key"></code><button id="copy-master-key">COPY</button></div></div></dialog>
-  <dialog id="ask-dialog" class="modal small-modal"><form id="ask-form" method="dialog"><header><div><span class="section-code" id="ask-kicker">CONFIRM</span><h2 id="ask-title">Are you sure?</h2></div><button type="button" data-ask="cancel">×</button></header><p id="ask-message"></p><div id="ask-fields"></div><div id="ask-error" class="form-error hidden"></div><footer><button type="button" class="outline-button" data-ask="cancel">Cancel</button><button type="submit" class="primary-action compact" id="ask-confirm"><span>Confirm</span><b>↗</b></button></footer></form></dialog>
+  <dialog id="trace-dialog" class="modal trace-modal"><div><header><div><span class="section-code">TRACE DETAILS</span><h2 id="trace-dialog-title">Request trace</h2></div><div class="trace-modal-tools"><div id="trace-nav" class="trace-nav hidden" title="Step through the list with the ↑ and ↓ keys"><button id="trace-previous" type="button" aria-label="Previous trace"><svg class="button-icon"><use href="#icon-chevron-up"/></svg></button><span id="trace-position">1 / 1</span><button id="trace-next" type="button" aria-label="Next trace"><svg class="button-icon"><use href="#icon-chevron-down"/></svg></button></div><button type="button" class="trace-close" data-close-dialog aria-label="Close"><svg class="button-icon"><use href="#icon-close"/></svg></button></div></header><div class="trace-modebar"><div><span>DISPLAY MODE</span><p id="trace-view-description">Conversation formatted for reading</p></div><div class="view-tabs"><button class="active" data-trace-view="readable">Readable</button><button data-trace-view="json">Raw JSON</button></div></div><div id="trace-detail"></div></div></dialog>
+  <dialog id="key-dialog" class="modal small-modal"><div><header><div><span class="section-code">ONE-TIME SECRET</span><h2 id="key-dialog-title">New master key</h2></div><button type="button" data-close-dialog aria-label="Close"><svg class="button-icon"><use href="#icon-close"/></svg></button></header><p id="key-dialog-note">This value will not be shown again. The previous master key no longer works.</p><div class="key-reveal"><code id="new-master-key"></code><button id="copy-master-key">Copy</button></div></div></dialog>
+  <dialog id="ask-dialog" class="modal small-modal"><form id="ask-form" method="dialog"><header><div><span class="section-code" id="ask-kicker">CONFIRM</span><h2 id="ask-title">Are you sure?</h2></div><button type="button" data-ask="cancel" aria-label="Close"><svg class="button-icon"><use href="#icon-close"/></svg></button></header><p id="ask-message"></p><div id="ask-fields"></div><div id="ask-error" class="form-error hidden"></div><footer><button type="button" class="outline-button" data-ask="cancel">Cancel</button><button type="submit" class="primary-action compact" id="ask-confirm"><span>Confirm</span><svg class="button-icon"><use href="#icon-arrow"/></svg></button></footer></form></dialog>
 
   <script src="/app.js" defer></script>
 </body>

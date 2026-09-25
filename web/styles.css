@@ -223,3 +223,29 @@ td .decision-lane{display:inline-block;padding:3px 7px;border:1px solid var(--li
 
 @media(max-width:1100px){.breakdown-grid{grid-template-columns:1fr 1fr}.profile-lanes,.preview-lanes{grid-template-columns:1fr}.profile-lanes>.lane-arrow,.preview-lanes>i{display:none}}
 @media(max-width:760px){.menu-toggle{display:grid}.breakdown-grid{grid-template-columns:1fr}.trace-modal{width:100vw}.timeline-events,.comparison-grid{grid-template-columns:1fr}.pricing-toolbar,.key-head-actions{flex-direction:column;align-items:stretch}.pricing-toolbar label,.panel-search,.key-head-actions .panel-search{min-width:0;width:100%}.comparison-message{grid-template-columns:1fr}.message-meta{grid-column:1}.trace-head-meta{flex-direction:column-reverse;align-items:flex-end;gap:4px}}
+
+.status-mark{background:#b8b5a8}.status-mark.good{background:var(--good)}.status-mark.bad{background:var(--coral)}
+
+/* Gateway status: live provider health on a dark card, in the login route-map language */
+.status-card{display:grid;grid-template-columns:minmax(260px,1.05fr) minmax(300px,1.3fr) minmax(200px,.7fr);align-items:stretch;margin:-6px 0 22px;background:var(--ink);color:var(--paper);border:1px solid var(--ink);box-shadow:6px 6px 0 var(--acid);min-height:168px}
+.status-card.degraded,.status-card.down{box-shadow:6px 6px 0 var(--coral)}.status-card.idle,.status-card.checking{box-shadow:6px 6px 0 #b8b5a8}
+.status-summary{display:flex;align-items:center;gap:18px;padding:22px 24px;border-right:1px solid #30332d}.status-kicker{font:700 11px var(--mono);letter-spacing:.14em;color:#8f948a}.status-summary h2{font:400 25px/1.15 var(--serif);margin:6px 0 7px;color:#fff}.status-summary p{margin:0;font-size:12px;line-height:1.55;color:#aeb3a9}
+.status-beacon{position:relative;flex:none;width:44px;height:44px;display:grid;place-items:center;border:1px solid #464a42;border-radius:50%}.status-beacon i{width:12px;height:12px;border-radius:50%;background:var(--acid);box-shadow:0 0 0 0 #d9ff4388;animation:statusBeacon 2s ease-out infinite}
+.status-card.degraded .status-beacon i,.status-card.down .status-beacon i{background:var(--coral);box-shadow:0 0 0 0 #ff684788}.status-card.idle .status-beacon i,.status-card.checking .status-beacon i{background:#8f948a;animation:none}
+@keyframes statusBeacon{70%{box-shadow:0 0 0 14px #d9ff4300}100%{box-shadow:0 0 0 0 #d9ff4300}}
+.status-map{display:grid;grid-template-columns:auto 1fr;align-items:center;gap:0;padding:18px 22px;border-right:1px solid #30332d;min-width:0}
+.status-core{width:48px;height:48px;display:grid;place-items:center;border:1px solid var(--acid);border-radius:50%;color:var(--acid);font:400 22px var(--serif);box-shadow:0 0 0 6px #d9ff4310;z-index:1;background:var(--ink)}
+.status-routes{display:flex;flex-direction:column;justify-content:center;gap:7px;min-width:0}.status-route{display:grid;grid-template-columns:minmax(28px,1fr) auto;align-items:center;min-width:0}
+.status-wire{position:relative;height:1px;background:#4b5046;overflow:hidden}.status-wire i{position:absolute;top:-2px;width:5px;height:5px;background:var(--acid);animation:packet 2.4s linear infinite}.status-wire i+i{animation-delay:1.2s}
+.status-route.bad .status-wire{background:repeating-linear-gradient(90deg,var(--coral) 0 4px,transparent 4px 8px)}.status-route.bad .status-wire i,.status-route.wait .status-wire i{display:none}
+.status-node{display:grid;grid-template-columns:auto auto auto;align-items:center;gap:8px;padding:6px 9px;border:1px solid #44483f;background:#161915;min-width:0}.status-node .brand-logo{width:15px;height:15px;color:var(--paper)}.status-node b{max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-weight:600;color:#fff}
+.status-node em{font:700 11px var(--mono);font-style:normal;color:var(--acid)}.status-route.bad .status-node{border-color:var(--coral)}.status-route.bad .status-node em{color:var(--coral)}.status-route.wait .status-node em{color:#8f948a}.status-empty{margin:0 0 0 14px;font:11px var(--mono);color:#8f948a}
+.status-stats{margin:0;padding:18px 22px;display:flex;flex-direction:column;justify-content:center;gap:12px}.status-stats dt{font:700 11px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:#8f948a}.status-stats dd{margin:3px 0 0;font:400 28px var(--mono);letter-spacing:-.04em;color:#fff}.status-stats dd small{font-size:14px;color:#8f948a}.status-stats div>small{font:11px var(--mono);color:#8f948a}.status-stats p{margin:0;padding-top:10px;border-top:1px solid #30332d;font:11px var(--mono);color:#8f948a}
+@media(prefers-reduced-motion:reduce){.status-beacon i,.status-wire i{animation:none}}
+@media(max-width:1100px){.status-card{grid-template-columns:1fr 1fr}.status-map{grid-column:1/-1;grid-row:2;border-right:0;border-top:1px solid #30332d}}
+@media(max-width:760px){.status-card{grid-template-columns:1fr}.status-summary{border-right:0;border-bottom:1px solid #30332d}.status-map{grid-row:auto}}
+
+/* Playground: the chat keeps a fixed height that fits the screen; only the configuration column scrolls */
+.playground-page{padding-bottom:24px}.playground-shell{height:calc(100dvh - 226px);min-height:520px;align-items:stretch}
+.play-controls{min-height:0;overflow-y:auto;scrollbar-width:thin}.chat-stage{min-height:0;display:flex;flex-direction:column}.chat-messages{flex:1;min-height:0;max-height:none;overflow-y:auto}.chat-top,.composer{flex:none}
+@media(max-width:760px){.playground-shell{height:auto}.play-controls{overflow:visible}.chat-stage{height:72dvh;min-height:480px}}
