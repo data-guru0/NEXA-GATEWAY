@@ -63,9 +63,9 @@
         <a href="#overview" data-route="overview" class="active"><span class="nav-icon">⌁</span><b>Overview</b><small>01</small></a>
         <a href="#providers" data-route="providers"><span class="nav-icon">◇</span><b>Providers</b><small>02</small></a>
         <a href="#routing" data-route="routing"><span class="nav-icon">⇌</span><b>Smart Routing</b><small>03</small></a>
-        <a href="#traces" data-route="traces"><span class="nav-icon">⌇</span><b>Traces</b><small>03</small></a>
-        <a href="#playground" data-route="playground"><span class="nav-icon">↗</span><b>Playground</b><small>04</small></a>
-        <a href="#team" data-route="team"><span class="nav-icon">◎</span><b>Access</b><small>05</small></a>
+        <a href="#traces" data-route="traces"><span class="nav-icon">⌇</span><b>Traces</b><small>04</small></a>
+        <a href="#playground" data-route="playground"><span class="nav-icon">↗</span><b>Playground</b><small>05</small></a>
+        <a href="#team" data-route="team"><span class="nav-icon">◎</span><b>Access</b><small>06</small></a>
       </nav>
       <div class="sidebar-bottom">
         <div class="system-pulse"><span class="pulse-orbit"><i></i></span><div><b>Gateway online</b><small id="sidebar-requests">0 requests / 24h</small></div></div>
@@ -78,7 +78,7 @@
         <button id="menu-toggle" class="menu-toggle" aria-label="Toggle menu">☰</button>
         <div class="breadcrumb"><span>NEXA</span><i>/</i><b id="page-crumb">OVERVIEW</b></div>
         <div class="top-actions">
-          <a class="endpoint-chip" href="#playground"><i></i><span>localhost:8080</span><b>/v1</b></a>
+          <a class="endpoint-chip" href="#playground"><i></i><span id="endpoint-host">localhost</span><b>/v1</b></a>
           <button id="refresh-button" class="icon-button" title="Refresh data">↻</button>
           <div class="user-chip"><span id="user-initial">M</span><div><b id="user-name">Master administrator</b><small id="user-role">OWNER</small></div></div>
         </div>
@@ -93,9 +93,9 @@
           <article class="metric-card acid"><header><span>REQUESTS</span><b id="stat-range-label">24H</b></header><strong id="stat-requests">0</strong><footer><span class="mini-spark" id="requests-spark"></span><span>gateway traffic</span></footer></article>
           <article class="metric-card"><header><span>SUCCESS RATE</span><b>HEALTH</b></header><strong id="stat-success">100<sup>%</sup></strong><footer><span class="status-mark good"></span><span id="success-caption">All systems nominal</span></footer></article>
           <article class="metric-card"><header><span>TOKENS</span><b>SELECTED</b></header><strong id="stat-tokens">0</strong><footer><span>↗</span><span>input + output</span></footer></article>
-          <article class="metric-card dark"><header><span>SPEND</span><b>EST.</b></header><strong id="stat-cost">$0.00</strong><footer><span>◌</span><span>known model pricing</span></footer></article>
-          <article class="metric-card"><header><span>PROVIDER LATENCY</span><b>AVG</b></header><strong id="stat-provider-latency">—</strong><footer><span>→</span><span>upstream API response time</span></footer></article>
-          <article class="metric-card"><header><span>GATEWAY OVERHEAD</span><b>AVG</b></header><strong id="stat-gateway-latency">—</strong><footer><span>⊕</span><span>Nexa processing time</span></footer></article>
+          <article class="metric-card dark"><header><span>SPEND</span><b>EST.</b></header><strong id="stat-cost">$0.00</strong><footer><span>◌</span><span>built-in + custom model pricing</span></footer></article>
+          <article class="metric-card"><header><span>PROVIDER LATENCY</span><b>AVG</b></header><strong id="stat-provider-latency">—</strong><footer><span>→</span><span id="stat-latency-pct">end-to-end p50 — · p95 —</span></footer></article>
+          <article class="metric-card"><header><span>GATEWAY OVERHEAD</span><b>AVG</b></header><strong id="stat-gateway-latency">—</strong><footer><span>⊕</span><span>auth, routing and Nexa processing</span></footer></article>
         </div>
         <article class="panel traffic-panel">
           <header class="panel-head chart-head"><div><span class="panel-kicker" id="traffic-period">TRAFFIC / 24 HOURS</span><h2>Request velocity</h2></div><div class="chart-head-tools"><div class="legend"><span><i class="ok"></i>Requests</span><span><i class="err"></i>Errors</span></div><label class="chart-range-select"><span>PERIOD</span><select id="chart-range"><option value="5m">Past 5 minutes</option><option value="30m">Past 30 minutes</option><option value="1h">Past hour</option><option value="6h">Past 6 hours</option><option value="24h" selected>Past 24 hours</option><option value="7d">Past 7 days</option><option value="30d">Past 30 days</option><option value="custom">Custom range</option></select></label></div></header>
@@ -103,59 +103,78 @@
           <div id="traffic-chart" class="traffic-chart"><div class="chart-empty">Waiting for the first request.</div></div>
         </article>
         <article class="panel recent-panel">
-          <header class="panel-head"><div><span class="panel-kicker">LIVE JOURNAL</span><h2>Recent traces</h2></div><a href="#traces" class="text-link">Explore all traces <span>→</span></a></header>
+          <header class="panel-head"><div><span class="panel-kicker"><span class="live-dot small"></span> LIVE JOURNAL · UPDATES EVERY 5S</span><h2>Recent traces</h2></div><a href="#traces" class="text-link">Explore all traces <span>→</span></a></header>
           <div class="table-wrap"><table><thead><tr><th>STATUS</th><th>PROVIDER</th><th>MODEL</th><th>TOKENS</th><th>LATENCY</th><th>COST</th><th>TIME</th></tr></thead><tbody id="recent-traces"></tbody></table></div>
         </article>
       </section>
 
       <section id="page-providers" class="page">
-        <div class="page-title-row"><div><div class="section-code">02 — CONNECTIONS</div><h1>Provider fabric</h1><p>Credentials are AES-256 encrypted before they touch disk.</p></div><button class="primary-action compact" data-open-provider><span>Add provider</span><b>＋</b></button></div>
+        <div class="page-title-row"><div><div class="section-code">02 — CONNECTIONS</div><h1>Provider fabric</h1><p>Credentials are AES-256 encrypted before they touch disk. Keys are verified every time you save.</p></div><button class="primary-action compact" data-open-provider data-admin><span>Add provider</span><b>＋</b></button></div>
         <div id="provider-grid" class="provider-grid"></div>
-        <div class="integration-note"><span>ROUTING CONVENTION</span><div><code>provider-slug/model-name</code><button data-copy="provider-slug/model-name">COPY</button></div><p>Use this model value with any OpenAI SDK pointed at Nexa. A single configured provider also accepts bare model names.</p></div>
+        <div class="integration-note"><span>ROUTING CONVENTION</span><div><code>provider-slug/model-name</code><button data-copy="provider-slug/model-name">COPY</button></div><p>Use this model value with any OpenAI SDK pointed at Nexa. A single configured provider also accepts bare model names, including ones that contain a slash.</p></div>
+        <article class="panel pricing-panel">
+          <header class="panel-head"><div><span class="panel-kicker">COST ESTIMATES</span><h2>Model pricing</h2></div><span class="panel-note">USD per 1M tokens · end a model with <code>*</code> to match a prefix</span></header>
+          <form id="price-form" class="price-form" data-admin><input id="price-model" required placeholder="Model id, e.g. gpt-5.5 or claude-*"><input id="price-input" type="number" min="0" step="0.0001" required placeholder="Input $/1M"><input id="price-output" type="number" min="0" step="0.0001" required placeholder="Output $/1M"><button type="submit">SAVE PRICE</button></form>
+          <div class="table-wrap"><table><thead><tr><th>MODEL</th><th>INPUT / 1M</th><th>OUTPUT / 1M</th><th>SOURCE</th><th></th></tr></thead><tbody id="price-table"></tbody></table></div>
+        </article>
       </section>
 
       <section id="page-routing" class="page">
-        <div class="page-title-row"><div><div class="section-code">03 — DECISION FABRIC</div><h1>Smart routing</h1><p>Match every prompt to the right model lane through one resilient virtual model.</p></div><button id="new-routing-profile" class="primary-action compact"><span>New profile</span><b>＋</b></button></div>
+        <div class="page-title-row"><div><div class="section-code">03 — DECISION FABRIC</div><h1>Smart routing</h1><p>Match every prompt to the right model lane through one resilient virtual model.</p></div><button id="new-routing-profile" class="primary-action compact" data-admin><span>New profile</span><b>＋</b></button></div>
         <div class="routing-hero">
           <div class="routing-orbit" aria-hidden="true"><span>PROMPT</span><i></i><b>N</b><i></i><span>BEST ROUTE</span></div>
-          <div><span class="panel-kicker">ONE DROP-IN MODEL</span><h2>Call <code>smart</code>. Nexa decides the rest.</h2><p>Jev measures prompt difficulty, chooses the matching model lane, and keeps real provider fallbacks ready if that route fails.</p></div>
-          <button data-copy="smart">COPY MODEL ID</button>
+          <div><span class="panel-kicker">ONE DROP-IN MODEL</span><h2>Call <code>smart</code>. Nexa decides the rest.</h2><p>Jev reads the conversation, measures its difficulty, and Nexa sends it to the matching model lane — streaming straight through, with real provider fallbacks if a route fails before it answers.</p></div>
+          <button data-copy-snippet="smart">COPY SNIPPET</button>
         </div>
+        <article class="panel route-preview">
+          <header class="panel-head"><div><span class="panel-kicker">LIVE DECISION PREVIEW</span><h2>Try a prompt</h2></div></header>
+          <form id="route-preview-form" class="route-preview-form"><select id="preview-profile" aria-label="Routing profile"></select><textarea id="preview-prompt" rows="2" required placeholder="Paste a prompt to see which lane Jev picks…"></textarea><label class="check"><input type="checkbox" id="preview-tools"> tools</label><label class="check"><input type="checkbox" id="preview-vision"> vision</label><button type="submit">EVALUATE ↗</button></form>
+          <div id="route-preview-result" class="route-preview-result hidden"></div>
+        </article>
         <div id="routing-profiles" class="routing-profiles"></div>
       </section>
 
       <section id="page-traces" class="page">
-        <div class="page-title-row"><div><div class="section-code">03 — OBSERVABILITY</div><h1>Trace journal</h1><p>The full story of every request, from prompt to response.</p></div><div class="trace-count"><strong id="trace-total">0</strong><span>RECORDED</span></div></div>
+        <div class="page-title-row"><div><div class="section-code">04 — OBSERVABILITY</div><h1>Trace journal</h1><p>The full story of every request, from prompt to response — including rejected ones.</p></div><div class="trace-count"><strong id="trace-total">0</strong><span>RECORDED</span></div></div>
         <div class="filter-bar"><form id="trace-search-form" class="search-field" role="search"><button class="search-submit" type="submit" aria-label="Search traces" title="Search">⌕</button><input id="trace-search" type="search" autocomplete="off" aria-label="Search traces" placeholder="Search prompts, responses, models, providers…"><button id="trace-search-clear" class="search-clear hidden" type="button" aria-label="Clear trace search" title="Clear search">×</button></form><div class="filter-tabs"><button class="active" data-status="all">All</button><button data-status="success">Success</button><button data-status="error">Errors</button></div><button id="trace-refresh" class="outline-button">Refresh ↻</button></div>
-        <div class="panel trace-table-panel"><div class="table-wrap"><table class="trace-table"><thead><tr><th>OUTCOME</th><th>ROUTE</th><th>MODEL</th><th>TOKENS</th><th>LATENCY</th><th>COST</th><th>CREATED</th><th></th></tr></thead><tbody id="trace-table"></tbody></table></div></div>
+        <div class="filter-bar trace-filters"><label><span>PROVIDER</span><select id="trace-provider"><option value="">All providers</option></select></label><label><span>MODEL</span><input id="trace-model" placeholder="Any model"></label><label><span>FROM</span><input id="trace-from" type="datetime-local"></label><label><span>TO</span><input id="trace-to" type="datetime-local"></label><button id="trace-filter-clear" class="outline-button" type="button">Clear filters</button></div>
+        <div class="panel trace-table-panel"><div class="table-wrap"><table class="trace-table"><thead><tr><th>OUTCOME</th><th>ROUTE</th><th>MODEL</th><th>TOKENS</th><th>LATENCY</th><th>COST</th><th>CREATED</th><th></th></tr></thead><tbody id="trace-table"></tbody></table></div><button id="trace-more" class="load-more hidden" type="button">LOAD MORE</button></div>
       </section>
 
       <section id="page-playground" class="page playground-page">
-        <div class="page-title-row"><div><div class="section-code">04 — LIVE LAB</div><h1>Playground</h1><p>Send a real request through the exact same gateway path as your application.</p></div><div class="lab-badge"><i></i>LIVE TRAFFIC</div></div>
+        <div class="page-title-row"><div><div class="section-code">05 — LIVE LAB</div><h1>Playground</h1><p>Send a real, streamed request through the exact same gateway path as your application.</p></div><div class="lab-badge"><i></i>LIVE TRAFFIC</div></div>
         <div class="playground-shell">
           <aside class="play-controls">
             <div class="control-heading"><span>RUN CONFIGURATION</span><b>⌘↵ to send</b></div>
             <label><span>PROVIDER</span><select id="play-provider"></select></label>
             <label><span>MODEL <b id="model-count"></b></span><div class="model-input-row"><select id="play-model"></select><button id="reload-models" title="Reload chat-capable models">↻</button></div></label>
-            <label><span>SYSTEM INSTRUCTION</span><textarea id="play-system" rows="5" placeholder="You are a concise, thoughtful assistant.">You are a concise, thoughtful assistant.</textarea></label>
+            <label><span>SYSTEM INSTRUCTION</span><textarea id="play-system" rows="4" placeholder="You are a concise, thoughtful assistant.">You are a concise, thoughtful assistant.</textarea></label>
             <label><span>TEMPERATURE <b id="temperature-value">0.7</b></span><input id="play-temperature" type="range" min="0" max="2" step="0.1" value="0.7"></label>
-            <label><span>MAX OUTPUT TOKENS</span><input id="play-max-tokens" type="number" min="1" max="32768" value="1024"></label>
+            <label><span>TOP P <b id="top-p-value">1</b></span><input id="play-top-p" type="range" min="0" max="1" step="0.05" value="1"></label>
+            <label><span>MAX OUTPUT TOKENS</span><input id="play-max-tokens" type="number" min="1" max="200000" value="1024"></label>
+            <label><span>STOP SEQUENCES</span><input id="play-stop" placeholder="Comma separated, optional"></label>
+            <label class="toggle-row compact-toggle"><span><b>JSON mode</b><small>Ask the model for a JSON object</small></span><input id="play-json" type="checkbox"><i></i></label>
+            <label class="toggle-row compact-toggle"><span><b>Stream response</b><small>Tokens appear as they arrive</small></span><input id="play-stream" type="checkbox" checked><i></i></label>
             <button id="clear-chat" class="outline-button full">Clear conversation</button>
           </aside>
           <div class="chat-stage">
             <div class="chat-top"><div><span class="live-dot"></span><b id="chat-route">NO ROUTE SELECTED</b></div><span id="chat-metrics">READY</span></div>
             <div id="chat-messages" class="chat-messages"><div class="chat-welcome"><div class="welcome-glyph">N</div><h2>Test the route.</h2><p>Select a provider and model, then send a message. This is a real request and will appear in Traces.</p></div></div>
-            <form id="chat-form" class="composer"><textarea id="chat-input" rows="2" placeholder="Ask the model something…" required></textarea><button type="submit"><span>SEND</span><b>↗</b></button><small>⌘ ENTER</small></form>
+            <form id="chat-form" class="composer"><textarea id="chat-input" rows="2" placeholder="Ask the model something…" required></textarea><button type="submit" id="chat-send"><span>SEND</span><b>↗</b></button><small>⌘ ENTER</small></form>
           </div>
         </div>
       </section>
 
       <section id="page-team" class="page">
-        <div class="page-title-row"><div><div class="section-code">05 — ACCESS CONTROL</div><h1>People & keys</h1><p>Invite local operators without sharing the master credential.</p></div><button class="primary-action compact" data-open-user><span>Create user</span><b>＋</b></button></div>
+        <div class="page-title-row"><div><div class="section-code">06 — ACCESS CONTROL</div><h1>People &amp; keys</h1><p>Invite local operators and give every application its own revocable key.</p></div><div class="title-actions"><button id="change-password" class="outline-button hidden" type="button">Change my password</button><button class="primary-action compact" data-open-user data-admin><span>Create user</span><b>＋</b></button></div></div>
         <div class="access-grid">
-          <article class="panel"><header class="panel-head"><div><span class="panel-kicker">LOCAL ACCOUNTS</span><h2>Dashboard users</h2></div></header><div id="users-list" class="users-list"></div></article>
-          <article class="master-card"><div class="key-art"><span>KEY / ROOT</span><b>⌁</b><i></i></div><div><span class="panel-kicker">MASTER CREDENTIAL</span><h2>Root of trust</h2><p>The master key authenticates API traffic and the owner dashboard. Rotating it immediately invalidates the previous value.</p><button id="rotate-key" class="danger-button">Rotate master key</button></div></article>
+          <article class="panel"><header class="panel-head"><div><span class="panel-kicker">LOCAL ACCOUNTS</span><h2>Dashboard users</h2></div><span class="panel-note">Admins manage everything · members view and use the playground</span></header><div id="users-list" class="users-list"></div></article>
+          <article class="master-card"><div class="key-art"><span>KEY / ROOT</span><b>⌁</b><i></i></div><div><span class="panel-kicker">MASTER CREDENTIAL</span><h2>Root of trust</h2><p>The master key signs in the owner and can call the API. Rotating it immediately invalidates the previous value and signs out other master sessions. Prefer per-app API keys for applications.</p><button id="rotate-key" class="danger-button" data-master>Rotate master key</button></div></article>
         </div>
+        <article class="panel keys-panel">
+          <header class="panel-head"><div><span class="panel-kicker">APPLICATION ACCESS</span><h2>API keys</h2></div><form id="api-key-form" class="inline-form" data-admin><input id="api-key-name" required maxlength="60" placeholder="Key name, e.g. billing-service"><button type="submit">CREATE KEY ＋</button></form></header>
+          <div class="table-wrap"><table><thead><tr><th>NAME</th><th>KEY</th><th>CREATED</th><th>LAST USED</th><th></th></tr></thead><tbody id="api-key-table"></tbody></table></div>
+        </article>
         <article class="panel sdk-panel"><header><span class="panel-kicker">CONNECT YOUR APP</span><div class="code-tabs"><button class="active" data-code="python">PYTHON</button><button data-code="javascript">JAVASCRIPT</button><button data-code="curl">CURL</button></div></header><pre id="sdk-code"></pre><button id="copy-sdk" class="copy-code">COPY</button></article>
       </section>
     </main>
@@ -175,9 +194,10 @@
       <div class="form-grid"><label class="field"><span>DISPLAY NAME</span><input id="provider-name" required placeholder="Production OpenAI"></label><label class="field"><span>ROUTING SLUG</span><input id="provider-slug" required placeholder="openai-prod"></label></div>
       <label class="field"><span>BASE URL</span><input id="provider-url" type="url" placeholder="Filled automatically"><small id="provider-url-note" class="provider-field-note">Provider endpoint is filled automatically.</small></label>
       <label class="field"><span>API KEY</span><input id="provider-key" type="password" placeholder="Stored with AES-256 encryption"><button class="reveal" type="button" data-reveal="provider-key">SHOW</button></label>
+      <label class="field"><span>EXTRA HEADERS <b id="provider-headers-status"></b></span><textarea id="provider-headers" rows="2" placeholder="Optional, one per line — e.g. HTTP-Referer: https://myapp.example"></textarea><small class="provider-field-note">Sent with every upstream request and encrypted at rest. Leave untouched to keep saved headers; clear the box to remove them.</small></label>
       <label class="toggle-row"><span><b>Connection enabled</b><small>Allow live traffic to use this route</small></span><input id="provider-enabled" type="checkbox" checked><i></i></label>
       <div id="provider-error" class="form-error hidden"></div>
-      <footer><button type="button" class="outline-button" data-close-dialog>Cancel</button><button type="submit" class="primary-action compact"><span>Save connection</span><b>↗</b></button></footer>
+      <footer><button type="button" class="outline-button" data-close-dialog>Cancel</button><button type="submit" class="primary-action compact"><span>Save &amp; verify</span><b>↗</b></button></footer>
     </form>
   </dialog>
 
@@ -186,17 +206,27 @@
       <header><div><span class="section-code">ROUTING / PROFILE</span><h2 id="routing-dialog-title">Create smart profile</h2></div><button type="button" data-close-dialog>×</button></header>
       <input id="routing-id" type="hidden">
       <div class="routing-form-grid"><label class="field"><span>PROFILE NAME</span><input id="routing-name" required placeholder="Production Autopilot"></label><label class="field"><span>ROUTING SLUG</span><input id="routing-slug" required placeholder="production"></label></div>
-      <section class="router-section"><div class="router-section-head"><div><b>01 / DECISION ENGINE · JEV BY TYPESAFE</b><p>Jev measures prompt difficulty and returns a confidence score for every decision.</p></div></div><label id="jev-key-field" class="field"><span>JEV API KEY <b id="jev-key-status"></b></span><input id="routing-jev-key" type="password" placeholder="Uses JEV_API_KEY when available"><small class="provider-field-note">Encrypted at rest. Leave blank to keep the saved or environment key.</small></label></section>
-      <section class="router-section ladder-section"><div class="router-section-head"><div><b>02 / MODEL LADDER</b><p>Assign a live provider model to each difficulty lane. Nexa tries the best-matched lane first, then moves through real fallbacks if needed.</p></div><button id="add-routing-target" type="button">＋ ADD LANE</button></div><div class="ladder-guide"><span><i>01</i><b>PROVIDER</b><small>Connected route</small></span><span><i>02</i><b>MODEL</b><small>Live catalog</small></span><span><i>03</i><b>LANE</b><small>Prompt difficulty</small></span></div><div id="routing-targets" class="routing-targets"></div></section>
+      <section class="router-section"><div class="router-section-head"><div><b>01 / DECISION ENGINE · JEV BY TYPESAFE</b><p>Jev reads the system prompt and the latest turns, measures difficulty, and returns a confidence score for every decision.</p></div></div><label id="jev-key-field" class="field"><span>JEV API KEY <b id="jev-key-status"></b></span><input id="routing-jev-key" type="password" placeholder="Uses JEV_API_KEY when available"><small class="provider-field-note">Encrypted at rest. Leave blank to keep the saved or environment key.</small></label></section>
+      <section class="router-section ladder-section"><div class="router-section-head"><div><b>02 / MODEL LADDER</b><p>Assign a live provider model to each difficulty lane. Nexa tries the best-matched lane first, then moves through real fallbacks if needed. Untick a capability a model lacks so requests needing it skip that lane.</p></div><button id="add-routing-target" type="button">＋ ADD LANE</button></div><div class="ladder-guide"><span><i>01</i><b>PROVIDER</b><small>Connected route</small></span><span><i>02</i><b>MODEL</b><small>Live catalog</small></span><span><i>03</i><b>LANE</b><small>Prompt difficulty</small></span></div><div id="routing-targets" class="routing-targets"></div></section>
+      <section class="router-section"><div class="router-section-head"><div><b>03 / FALLBACK &amp; LIMITS</b><p>What happens when Jev is unsure or unavailable, and how long a provider may take to start answering.</p></div></div>
+        <div class="settings-grid">
+          <label class="field"><span>IF JEV IS UNAVAILABLE</span><select id="routing-fallback"><option value="low">Use LIGHT lane</option><option value="medium" selected>Use MEDIUM lane</option><option value="high">Use HEAVY lane</option></select></label>
+          <label class="field"><span>ESCALATE BELOW CONFIDENCE</span><input id="routing-threshold" type="number" min="0" max="1" step="0.05" value="0.6"></label>
+          <label class="field"><span>FIRST-BYTE TIMEOUT (S)</span><input id="routing-timeout" type="number" min="1" max="600" value="120"></label>
+          <label class="field"><span>RETRIES PER LANE</span><input id="routing-retries" type="number" min="0" max="5" value="1"></label>
+        </div>
+        <small class="provider-field-note">Below the confidence threshold Nexa moves one lane up to protect answer quality (0 turns this off). The timeout only covers the wait for a provider to respond — a long answer that has started is never cut off.</small>
+      </section>
       <div id="routing-error" class="form-error hidden"></div>
       <footer><button type="button" class="outline-button" data-close-dialog>Cancel</button><button type="submit" class="primary-action compact"><span>Save profile</span><b>↗</b></button></footer>
     </form>
   </dialog>
 
-  <dialog id="user-dialog" class="modal small-modal"><form id="user-form" method="dialog"><header><div><span class="section-code">ACCESS / NEW</span><h2>Create user</h2></div><button type="button" data-close-dialog>×</button></header><label class="field"><span>USERNAME</span><input id="new-username" minlength="3" required placeholder="operator"></label><label class="field"><span>PASSWORD</span><input id="new-password" type="password" minlength="8" required placeholder="At least 8 characters"></label><label class="field"><span>ROLE</span><select id="new-role"><option value="member">Member</option><option value="admin">Administrator</option></select></label><div id="user-error" class="form-error hidden"></div><footer><button type="button" class="outline-button" data-close-dialog>Cancel</button><button type="submit" class="primary-action compact"><span>Create user</span><b>＋</b></button></footer></form></dialog>
+  <dialog id="user-dialog" class="modal small-modal"><form id="user-form" method="dialog"><header><div><span class="section-code">ACCESS / NEW</span><h2>Create user</h2></div><button type="button" data-close-dialog>×</button></header><label class="field"><span>USERNAME</span><input id="new-username" minlength="3" required placeholder="operator"></label><label class="field"><span>PASSWORD</span><input id="new-password" type="password" minlength="8" required placeholder="At least 8 characters"></label><label class="field"><span>ROLE</span><select id="new-role"><option value="member">Member — view &amp; playground</option><option value="admin">Administrator — full control</option></select></label><div id="user-error" class="form-error hidden"></div><footer><button type="button" class="outline-button" data-close-dialog>Cancel</button><button type="submit" class="primary-action compact"><span>Create user</span><b>＋</b></button></footer></form></dialog>
 
-  <dialog id="trace-dialog" class="modal trace-modal"><div><header><div><span class="section-code">TRACE / DETAIL</span><h2 id="trace-dialog-title">Request trace</h2></div><button type="button" data-close-dialog>×</button></header><div class="trace-modebar"><div><span>DISPLAY MODE</span><p id="trace-view-description">Conversation formatted for reading</p></div><div class="view-tabs"><button class="active" data-trace-view="readable">Readable</button><button data-trace-view="json">Raw JSON</button></div></div><div id="trace-detail"></div></div></dialog>
-  <dialog id="key-dialog" class="modal small-modal"><div><header><div><span class="section-code">SAVE THIS NOW</span><h2>New master key</h2></div><button type="button" data-close-dialog>×</button></header><p>This value will not be shown again. The previous master key no longer works.</p><div class="key-reveal"><code id="new-master-key"></code><button id="copy-master-key">COPY</button></div></div></dialog>
+  <dialog id="trace-dialog" class="modal trace-modal"><div><header><div><span class="section-code">TRACE / DETAIL</span><h2 id="trace-dialog-title">Request trace</h2></div><div class="trace-modal-tools"><button type="button" class="outline-button" id="trace-replay">Open in Playground</button><button type="button" class="outline-button" id="trace-curl">Copy as cURL</button><button type="button" data-close-dialog>×</button></div></header><div class="trace-modebar"><div><span>DISPLAY MODE</span><p id="trace-view-description">Conversation formatted for reading</p></div><div class="view-tabs"><button class="active" data-trace-view="readable">Readable</button><button data-trace-view="json">Raw JSON</button></div></div><div id="trace-detail"></div></div></dialog>
+  <dialog id="key-dialog" class="modal small-modal"><div><header><div><span class="section-code">SAVE THIS NOW</span><h2 id="key-dialog-title">New master key</h2></div><button type="button" data-close-dialog>×</button></header><p id="key-dialog-note">This value will not be shown again. The previous master key no longer works.</p><div class="key-reveal"><code id="new-master-key"></code><button id="copy-master-key">COPY</button></div></div></dialog>
+  <dialog id="ask-dialog" class="modal small-modal"><form id="ask-form" method="dialog"><header><div><span class="section-code" id="ask-kicker">CONFIRM</span><h2 id="ask-title">Are you sure?</h2></div><button type="button" data-ask="cancel">×</button></header><p id="ask-message"></p><div id="ask-fields"></div><div id="ask-error" class="form-error hidden"></div><footer><button type="button" class="outline-button" data-ask="cancel">Cancel</button><button type="submit" class="primary-action compact" id="ask-confirm"><span>Confirm</span><b>↗</b></button></footer></form></dialog>
 
   <script src="/app.js" defer></script>
 </body>
