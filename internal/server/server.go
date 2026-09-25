@@ -49,6 +49,7 @@ type providerCheck struct {
 
 func New(s *store.Store, log *slog.Logger, secureCookies bool) http.Handler {
 	x := &Server{Store: s, Gateway: gateway.New(s), Log: log, SecureCookies: secureCookies, logins: &limiter{hits: map[string]*window{}}, checks: map[string]providerCheck{}}
+	go x.healthLoop()
 	r := chi.NewRouter()
 	r.Use(middleware.RealIP, middleware.RequestID, middleware.Recoverer, x.securityHeaders, x.accessLog, gateway.StartClock)
 	r.Get("/healthz", x.health)
@@ -460,11 +461,11 @@ func (s *Server) view(p store.Provider) providerView {
 }
 
 // checkProvider verifies the key by listing models, so a bad credential shows up on save.
-func (s *Server) checkProvider(r *http.Request, p store.Provider) {
+func (s *Server) checkProvider(ctx context.Context, p store.Provider) {
 	s.Gateway.ForgetModels(p.ID)
 	c := providerCheck{CheckedAt: time.Now().UTC()}
 	if p.Enabled {
-		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 		models, err := s.Gateway.Models(ctx, p, true)
 		if err != nil {
@@ -478,6 +479,20 @@ func (s *Server) checkProvider(r *http.Request, p store.Provider) {
 	s.checksMu.Lock()
 	s.checks[p.ID] = c
 	s.checksMu.Unlock()
+}
+
+// healthLoop re-verifies every provider shortly after start and then every ten
+// minutes, so dashboard health reflects real reachability rather than the last save.
+func (s *Server) healthLoop() {
+	time.Sleep(3 * time.Second)
+	for {
+		if providers, err := s.Store.Providers(); err == nil {
+			for _, p := range providers {
+				s.checkProvider(context.Background(), p)
+			}
+		}
+		time.Sleep(10 * time.Minute)
+	}
 }
 
 func (s *Server) providers(w http.ResponseWriter, r *http.Request) {
@@ -507,7 +522,7 @@ func (s *Server) createProvider(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, store.ErrMessage(err))
 		return
 	}
-	s.checkProvider(r, v)
+	s.checkProvider(r.Context(), v)
 	writeJSON(w, 201, s.view(v))
 }
 func (s *Server) updateProvider(w http.ResponseWriter, r *http.Request) {
@@ -530,7 +545,7 @@ func (s *Server) updateProvider(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, store.ErrMessage(err))
 		return
 	}
-	s.checkProvider(r, v)
+	s.checkProvider(r.Context(), v)
 	writeJSON(w, 200, s.view(v))
 }
 func (s *Server) deleteProvider(w http.ResponseWriter, r *http.Request) {
