@@ -88,22 +88,26 @@ type Trace struct {
 }
 
 type Stats struct {
-	Requests24H   int64         `json:"requests_24h"`
-	Requests      int64         `json:"requests"`
-	SuccessRate   float64       `json:"success_rate"`
-	Tokens24H     int64         `json:"tokens_24h"`
-	Cost24H       float64       `json:"cost_24h"`
-	AvgLatencyMS  float64       `json:"avg_latency_ms"`
-	P50LatencyMS  float64       `json:"p50_latency_ms"`
-	P95LatencyMS  float64       `json:"p95_latency_ms"`
-	AvgUpstreamMS float64       `json:"avg_upstream_latency_ms"`
-	AvgGatewayMS  float64       `json:"avg_gateway_latency_ms"`
-	Providers     int64         `json:"providers"`
-	Hourly        []Point       `json:"hourly"`
-	Previous      StatsPrevious `json:"previous"`
-	Range         string        `json:"range"`
-	From          time.Time     `json:"from"`
-	To            time.Time     `json:"to"`
+	Requests24H   int64            `json:"requests_24h"`
+	Requests      int64            `json:"requests"`
+	SuccessRate   float64          `json:"success_rate"`
+	Tokens24H     int64            `json:"tokens_24h"`
+	Cost24H       float64          `json:"cost_24h"`
+	AvgLatencyMS  float64          `json:"avg_latency_ms"`
+	P50LatencyMS  float64          `json:"p50_latency_ms"`
+	P95LatencyMS  float64          `json:"p95_latency_ms"`
+	AvgUpstreamMS float64          `json:"avg_upstream_latency_ms"`
+	AvgGatewayMS  float64          `json:"avg_gateway_latency_ms"`
+	Providers     int64            `json:"providers"`
+	Hourly        []Point          `json:"hourly"`
+	Previous      StatsPrevious    `json:"previous"`
+	ByProvider    []StatsBreakdown `json:"by_provider"`
+	ByModel       []StatsBreakdown `json:"by_model"`
+	Routing       []RoutingUsage   `json:"routing"`
+	SmartRequests int64            `json:"smart_requests"`
+	Range         string           `json:"range"`
+	From          time.Time        `json:"from"`
+	To            time.Time        `json:"to"`
 }
 
 type StatsPrevious struct {
@@ -113,6 +117,22 @@ type StatsPrevious struct {
 	Cost          float64 `json:"cost"`
 	AvgUpstreamMS float64 `json:"avg_upstream_latency_ms"`
 	AvgGatewayMS  float64 `json:"avg_gateway_latency_ms"`
+}
+
+type StatsBreakdown struct {
+	ProviderID   string  `json:"provider_id,omitempty"`
+	ProviderName string  `json:"provider_name,omitempty"`
+	Model        string  `json:"model,omitempty"`
+	Requests     int64   `json:"requests"`
+	Errors       int64   `json:"errors"`
+	Cost         float64 `json:"cost"`
+	P95LatencyMS float64 `json:"p95_latency_ms"`
+}
+
+type RoutingUsage struct {
+	ProfileSlug string `json:"profile_slug"`
+	Lane        string `json:"lane"`
+	Requests    int64  `json:"requests"`
 }
 
 type Point struct {
@@ -1082,7 +1102,7 @@ func (s *Store) Trace(id string) (Trace, error) {
 }
 
 func (s *Store) Stats(from, to time.Time, bucket time.Duration, rangeName string) (Stats, error) {
-	x := Stats{SuccessRate: 100, Range: rangeName, From: from, To: to, Hourly: []Point{}}
+	x := Stats{SuccessRate: 100, Range: rangeName, From: from, To: to, Hourly: []Point{}, ByProvider: []StatsBreakdown{}, ByModel: []StatsBreakdown{}, Routing: []RoutingUsage{}}
 	if bucket <= 0 {
 		bucket = time.Hour
 	}
@@ -1104,20 +1124,27 @@ func (s *Store) Stats(from, to time.Time, bucket time.Duration, rangeName string
 	}
 	bucketTotals := make([]totals, len(x.Hourly))
 	latencies := []int64{}
-	rows, err := s.DB.Query(`SELECT status,total_tokens,cost_usd,latency_ms,upstream_latency_ms,gateway_latency_ms,created_at FROM traces WHERE created_at>=? AND created_at<=? ORDER BY created_at`, from.UTC(), to.UTC())
+	type breakdownAccumulator struct {
+		StatsBreakdown
+		latencies []int64
+	}
+	providers := map[string]*breakdownAccumulator{}
+	models := map[string]*breakdownAccumulator{}
+	routing := map[string]*RoutingUsage{}
+	rows, err := s.DB.Query(`SELECT COALESCE(provider_id,''),provider_name,model,status,total_tokens,cost_usd,latency_ms,upstream_latency_ms,gateway_latency_ms,metadata,created_at FROM traces WHERE created_at>=? AND created_at<=? ORDER BY created_at`, from.UTC(), to.UTC())
 	if err != nil {
 		return x, err
 	}
 	defer rows.Close()
 	var successes int64
 	for rows.Next() {
-		var status string
+		var providerID, providerName, model, status, metadata string
 		var tokens int64
 		var cost float64
 		var latency int64
 		var upstream, gateway float64
 		var created time.Time
-		if err := rows.Scan(&status, &tokens, &cost, &latency, &upstream, &gateway, &created); err != nil {
+		if err := rows.Scan(&providerID, &providerName, &model, &status, &tokens, &cost, &latency, &upstream, &gateway, &metadata, &created); err != nil {
 			return x, err
 		}
 		x.Requests++
@@ -1143,6 +1170,55 @@ func (s *Store) Stats(from, to time.Time, bucket time.Duration, rangeName string
 		if status != "success" {
 			x.Hourly[idx].Errors++
 		}
+		providerKey := providerID
+		if providerKey == "" {
+			providerKey = providerName
+		}
+		if providers[providerKey] == nil {
+			providers[providerKey] = &breakdownAccumulator{StatsBreakdown: StatsBreakdown{ProviderID: providerID, ProviderName: providerName}}
+		}
+		provider := providers[providerKey]
+		provider.Requests++
+		provider.Cost += cost
+		provider.latencies = append(provider.latencies, latency)
+		if status != "success" {
+			provider.Errors++
+		}
+		modelKey := providerKey + "\x00" + model
+		if models[modelKey] == nil {
+			models[modelKey] = &breakdownAccumulator{StatsBreakdown: StatsBreakdown{ProviderID: providerID, ProviderName: providerName, Model: model}}
+		}
+		modelStats := models[modelKey]
+		modelStats.Requests++
+		modelStats.Cost += cost
+		modelStats.latencies = append(modelStats.latencies, latency)
+		if status != "success" {
+			modelStats.Errors++
+		}
+		var meta struct {
+			SmartRouting bool   `json:"smart_routing"`
+			ProfileSlug  string `json:"profile_slug"`
+			Lane         string `json:"lane"`
+			Signals      struct {
+				Lane       string `json:"lane"`
+				Complexity string `json:"complexity"`
+			} `json:"signals"`
+		}
+		if json.Unmarshal([]byte(metadata), &meta) == nil && meta.SmartRouting {
+			x.SmartRequests++
+			lane := meta.Signals.Lane
+			if lane == "" {
+				lane = meta.Lane
+			}
+			if lane == "" {
+				lane = meta.Signals.Complexity
+			}
+			key := meta.ProfileSlug + "\x00" + lane
+			if routing[key] == nil {
+				routing[key] = &RoutingUsage{ProfileSlug: meta.ProfileSlug, Lane: lane}
+			}
+			routing[key].Requests++
+		}
 		bucketTotals[idx].upstream += float64(upstream)
 		bucketTotals[idx].gateway += float64(gateway)
 		bucketTotals[idx].count++
@@ -1166,6 +1242,29 @@ func (s *Store) Stats(from, to time.Time, bucket time.Duration, rangeName string
 			x.Hourly[i].GatewayMS = bucketTotals[i].gateway / float64(bucketTotals[i].count)
 		}
 	}
+	finishBreakdown := func(values map[string]*breakdownAccumulator) []StatsBreakdown {
+		out := make([]StatsBreakdown, 0, len(values))
+		for _, value := range values {
+			sort.Slice(value.latencies, func(i, j int) bool { return value.latencies[i] < value.latencies[j] })
+			if len(value.latencies) > 0 {
+				value.P95LatencyMS = float64(value.latencies[(len(value.latencies)-1)*95/100])
+			}
+			out = append(out, value.StatsBreakdown)
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i].Requests > out[j].Requests })
+		return out
+	}
+	x.ByProvider = finishBreakdown(providers)
+	x.ByModel = finishBreakdown(models)
+	for _, value := range routing {
+		x.Routing = append(x.Routing, *value)
+	}
+	sort.Slice(x.Routing, func(i, j int) bool {
+		if x.Routing[i].ProfileSlug == x.Routing[j].ProfileSlug {
+			return x.Routing[i].Lane < x.Routing[j].Lane
+		}
+		return x.Routing[i].ProfileSlug < x.Routing[j].ProfileSlug
+	})
 	x.Previous = s.statsPrevious(from.Add(-to.Sub(from)), from)
 	_ = s.DB.QueryRow("SELECT COUNT(*) FROM providers WHERE enabled=1").Scan(&x.Providers)
 	return x, nil
