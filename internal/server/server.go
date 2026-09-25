@@ -1,15 +1,19 @@
 package server
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io/fs"
 	"log/slog"
 	"mime"
+	"net"
 	"net/http"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/evolvue/nexa-gateway/internal/gateway"
@@ -24,17 +28,29 @@ type Server struct {
 	Gateway       *gateway.Gateway
 	Log           *slog.Logger
 	SecureCookies bool
+	logins        *limiter
+	checksMu      sync.Mutex
+	checks        map[string]providerCheck
 }
 
+type principalKey struct{}
+
 type principal struct {
-	UserID string
-	Master bool
+	store.SessionInfo
+	token string
+}
+
+type providerCheck struct {
+	OK        bool      `json:"ok"`
+	Models    int       `json:"models"`
+	Error     string    `json:"error,omitempty"`
+	CheckedAt time.Time `json:"checked_at"`
 }
 
 func New(s *store.Store, log *slog.Logger, secureCookies bool) http.Handler {
-	x := &Server{Store: s, Gateway: gateway.New(s), Log: log, SecureCookies: secureCookies}
+	x := &Server{Store: s, Gateway: gateway.New(s), Log: log, SecureCookies: secureCookies, logins: &limiter{hits: map[string]*window{}}, checks: map[string]providerCheck{}}
 	r := chi.NewRouter()
-	r.Use(middleware.RealIP, middleware.RequestID, middleware.Recoverer, x.securityHeaders, x.accessLog)
+	r.Use(middleware.RealIP, middleware.RequestID, middleware.Recoverer, x.securityHeaders, x.accessLog, gateway.StartClock)
 	r.Get("/healthz", x.health)
 	r.With(x.gatewayAuth).Post("/v1/chat/completions", x.Gateway.ChatCompletions)
 	r.With(x.gatewayAuth).Get("/v1/models", x.allModels)
@@ -45,25 +61,37 @@ func New(s *store.Store, log *slog.Logger, secureCookies bool) http.Handler {
 		r.Group(func(r chi.Router) {
 			r.Use(x.dashboardAuth, x.sameOrigin)
 			r.Get("/auth/me", x.me)
+			r.Post("/auth/password", x.changePassword)
 			r.Get("/stats", x.stats)
 			r.Get("/providers", x.providers)
-			r.Post("/providers", x.createProvider)
-			r.Put("/providers/{id}", x.updateProvider)
-			r.Delete("/providers/{id}", x.deleteProvider)
 			r.Get("/providers/{id}/models", x.models)
 			r.Get("/routing/profiles", x.routingProfiles)
-			r.Post("/routing/profiles", x.createRoutingProfile)
-			r.Put("/routing/profiles/{id}", x.updateRoutingProfile)
-			r.Delete("/routing/profiles/{id}", x.deleteRoutingProfile)
-			r.Post("/routing/profiles/{id}/activate", x.activateRoutingProfile)
 			r.Post("/routing/evaluate", x.evaluateRouting)
 			r.Get("/traces", x.traces)
 			r.Get("/traces/{id}", x.trace)
 			r.Get("/users", x.users)
-			r.Post("/users", x.createUser)
-			r.Delete("/users/{id}", x.deleteUser)
-			r.Post("/master-key/rotate", x.rotateMaster)
-			r.Post("/playground/chat", x.Gateway.ChatCompletions)
+			r.Get("/prices", x.prices)
+			r.Get("/api-keys", x.apiKeys)
+			r.Post("/playground/chat", x.playground)
+			r.Group(func(r chi.Router) {
+				r.Use(x.requireAdmin)
+				r.Post("/providers", x.createProvider)
+				r.Put("/providers/{id}", x.updateProvider)
+				r.Delete("/providers/{id}", x.deleteProvider)
+				r.Post("/routing/profiles", x.createRoutingProfile)
+				r.Put("/routing/profiles/{id}", x.updateRoutingProfile)
+				r.Delete("/routing/profiles/{id}", x.deleteRoutingProfile)
+				r.Post("/routing/profiles/{id}/activate", x.activateRoutingProfile)
+				r.Post("/routing/profiles/{id}/check", x.checkRoutingProfile)
+				r.Post("/users", x.createUser)
+				r.Put("/users/{id}", x.updateUser)
+				r.Delete("/users/{id}", x.deleteUser)
+				r.Put("/prices", x.setPrice)
+				r.Delete("/prices", x.deletePrice)
+				r.Post("/api-keys", x.createAPIKey)
+				r.Delete("/api-keys/{id}", x.deleteAPIKey)
+				r.Post("/master-key/rotate", x.rotateMaster)
+			})
 		})
 	})
 	static, _ := fs.Sub(webassets.Files, ".")
@@ -108,16 +136,24 @@ func (s *Server) accessLog(next http.Handler) http.Handler {
 	})
 }
 
+// gatewayAuth accepts the master key or a revocable per-app API key.
 func (s *Server) gatewayAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
-		if token != "" && s.Store.ValidateMaster(token) {
-			next.ServeHTTP(w, r)
+		if s.Store.ValidateMaster(token) {
+			next.ServeHTTP(w, gateway.Annotate(r, "api", "master key"))
 			return
 		}
-		writeError(w, 401, "A valid Nexa master key is required.")
+		if name, ok := s.Store.ValidateAPIKey(token); ok {
+			next.ServeHTTP(w, gateway.Annotate(r, "api", name))
+			return
+		}
+		writeError(w, 401, "A valid Nexa API key or master key is required.")
 	})
 }
+
+// dashboardAuth stores the session principal in the request context. Nothing
+// about identity is read from request headers, so clients cannot forge it.
 func (s *Server) dashboardAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, err := r.Cookie("nexa_session")
@@ -125,18 +161,30 @@ func (s *Server) dashboardAuth(next http.Handler) http.Handler {
 			writeError(w, 401, "Sign in to continue.")
 			return
 		}
-		uid, master, err := s.Store.Session(c.Value)
+		info, err := s.Store.Session(c.Value)
 		if err != nil {
 			writeError(w, 401, "Your session expired. Sign in again.")
 			return
 		}
-		r.Header.Set("X-Nexa-User", uid)
-		if master {
-			r.Header.Set("X-Nexa-Master", "1")
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), principalKey{}, principal{info, c.Value})))
+	})
+}
+
+func who(r *http.Request) principal {
+	p, _ := r.Context().Value(principalKey{}).(principal)
+	return p
+}
+
+func (s *Server) requireAdmin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if p := who(r); !p.Master && p.Role != "admin" {
+			writeError(w, 403, "Administrator access is required.")
+			return
 		}
 		next.ServeHTTP(w, r)
 	})
 }
+
 func (s *Server) sameOrigin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == "GET" || r.Method == "HEAD" {
@@ -152,38 +200,102 @@ func (s *Server) sameOrigin(next http.Handler) http.Handler {
 	})
 }
 
+// limiter blocks an address after 10 failed logins until its 10-minute window resets.
+type limiter struct {
+	mu   sync.Mutex
+	hits map[string]*window
+}
+type window struct {
+	count int
+	reset time.Time
+}
+
+const (
+	loginFailures = 10
+	loginWindow   = 10 * time.Minute
+)
+
+func (l *limiter) blocked(key string) time.Duration {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if w, ok := l.hits[key]; ok && w.count >= loginFailures && time.Now().Before(w.reset) {
+		return time.Until(w.reset)
+	}
+	return 0
+}
+func (l *limiter) fail(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := time.Now()
+	for k, w := range l.hits { // ponytail: sweep on write; fine for login-rate traffic
+		if now.After(w.reset) {
+			delete(l.hits, k)
+		}
+	}
+	w, ok := l.hits[key]
+	if !ok {
+		w = &window{reset: now.Add(loginWindow)}
+		l.hits[key] = w
+	}
+	w.count++
+}
+func (l *limiter) clear(key string) {
+	l.mu.Lock()
+	delete(l.hits, key)
+	l.mu.Unlock()
+}
+
+func clientIP(r *http.Request) string {
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
+}
+
+func (s *Server) setSession(w http.ResponseWriter, token string) {
+	http.SetCookie(w, &http.Cookie{Name: "nexa_session", Value: token, Path: "/", HttpOnly: true, Secure: s.SecureCookies, SameSite: http.SameSiteStrictMode, MaxAge: 7 * 24 * 3600})
+}
+
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
+	ip := clientIP(r)
+	if wait := s.logins.blocked(ip); wait > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
+		writeError(w, 429, "Too many failed sign-in attempts. Try again in a few minutes.")
+		return
+	}
 	var in struct{ MasterKey, Username, Password string }
 	if !decode(w, r, &in) {
 		return
 	}
-	master := false
-	uid := ""
-	var username, role string
-	if in.MasterKey != "" && s.Store.ValidateMaster(in.MasterKey) {
-		master = true
-		username = "Master administrator"
-		role = "owner"
-	} else if in.Username != "" {
+	var info store.SessionInfo
+	switch {
+	case in.MasterKey != "":
+		if !s.Store.ValidateMaster(in.MasterKey) {
+			s.logins.fail(ip)
+			writeError(w, 401, "Invalid master key.")
+			return
+		}
+		info = store.SessionInfo{Master: true, Username: "Master administrator", Role: "owner"}
+	case in.Username != "":
 		u, err := s.Store.LoginUser(in.Username, in.Password)
 		if err != nil {
+			s.logins.fail(ip)
 			writeError(w, 401, "Invalid username or password.")
 			return
 		}
-		uid = u.ID
-		username = u.Username
-		role = u.Role
-	} else {
-		writeError(w, 401, "Invalid master key.")
+		info = store.SessionInfo{UserID: u.ID, Username: u.Username, Role: u.Role}
+	default:
+		writeError(w, 401, "Enter a master key or a username and password.")
 		return
 	}
-	session, err := s.Store.CreateSession(uid, master)
+	s.logins.clear(ip)
+	token, err := s.Store.CreateSession(info.UserID, info.Master)
 	if err != nil {
 		writeError(w, 500, "Could not create session.")
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: "nexa_session", Value: session, Path: "/", HttpOnly: true, Secure: s.SecureCookies, SameSite: http.SameSiteStrictMode, MaxAge: 7 * 24 * 3600})
-	writeJSON(w, 200, map[string]any{"username": username, "role": role, "master": master})
+	s.setSession(w, token)
+	writeJSON(w, 200, meJSON(info))
 }
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie("nexa_session"); err == nil {
@@ -192,23 +304,35 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{Name: "nexa_session", Value: "", Path: "/", HttpOnly: true, Secure: s.SecureCookies, SameSite: http.SameSiteStrictMode, MaxAge: -1})
 	w.WriteHeader(204)
 }
+func meJSON(i store.SessionInfo) map[string]any {
+	return map[string]any{"id": i.UserID, "username": i.Username, "role": i.Role, "master": i.Master}
+}
 func (s *Server) me(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("X-Nexa-Master") == "1" {
-		writeJSON(w, 200, map[string]any{"username": "Master administrator", "role": "owner", "master": true})
+	writeJSON(w, 200, meJSON(who(r).SessionInfo))
+}
+
+func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
+	p := who(r)
+	if p.Master {
+		writeError(w, 400, "The master administrator signs in with the master key; rotate it instead.")
 		return
 	}
-	users, _ := s.Store.Users()
-	for _, u := range users {
-		if u.ID == r.Header.Get("X-Nexa-User") {
-			writeJSON(w, 200, map[string]any{"username": u.Username, "role": u.Role, "master": false})
-			return
-		}
+	var in struct {
+		Current string `json:"current_password"`
+		New     string `json:"new_password"`
 	}
-	writeError(w, 401, "User not found.")
+	if !decode(w, r, &in) {
+		return
+	}
+	if err := s.Store.ChangePassword(p.UserID, in.Current, in.New, p.token); err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	w.WriteHeader(204)
 }
+
 func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
-	providers, _ := s.Store.Providers()
-	writeJSON(w, 200, map[string]any{"name": "Nexa Gateway", "version": "0.1.0", "providers": len(providers)})
+	writeJSON(w, 200, map[string]any{"name": "Nexa Gateway", "version": "0.1.0"})
 }
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	if err := s.Store.Health(r.Context()); err != nil {
@@ -285,69 +409,144 @@ func defaultBase(t string) string {
 }
 
 type providerInput struct {
-	Name    string `json:"name"`
-	Slug    string `json:"slug"`
-	Type    string `json:"type"`
-	BaseURL string `json:"base_url"`
-	APIKey  string `json:"api_key"`
-	Enabled *bool  `json:"enabled"`
+	Name         string  `json:"name"`
+	Slug         string  `json:"slug"`
+	Type         string  `json:"type"`
+	BaseURL      string  `json:"base_url"`
+	APIKey       string  `json:"api_key"`
+	Enabled      *bool   `json:"enabled"`
+	ExtraHeaders *string `json:"extra_headers"` // "Name: value" per line; omitted keeps, "" clears
 }
 
-func (in providerInput) provider() store.Provider {
+func (in providerInput) provider() (store.Provider, error) {
 	enabled := true
 	if in.Enabled != nil {
 		enabled = *in.Enabled
 	}
-	return store.Provider{Name: in.Name, Slug: in.Slug, Type: in.Type, BaseURL: in.BaseURL, APIKey: in.APIKey, Enabled: enabled}
+	p := store.Provider{Name: in.Name, Slug: in.Slug, Type: in.Type, BaseURL: in.BaseURL, APIKey: in.APIKey, Enabled: enabled}
+	if p.BaseURL == "" {
+		p.BaseURL = defaultBase(p.Type)
+	}
+	if in.ExtraHeaders != nil {
+		p.Headers = map[string]string{}
+		for _, line := range strings.Split(*in.ExtraHeaders, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			name, value, ok := strings.Cut(line, ":")
+			name = strings.TrimSpace(name)
+			if !ok || name == "" || strings.ContainsAny(name, " \t\r") {
+				return p, errors.New("extra headers must be one \"Name: value\" per line")
+			}
+			p.Headers[http.CanonicalHeaderKey(name)] = strings.TrimSpace(value)
+		}
+	}
+	return p, nil
 }
+
+type providerView struct {
+	store.Provider
+	Check *providerCheck `json:"check,omitempty"`
+}
+
+func (s *Server) view(p store.Provider) providerView {
+	s.checksMu.Lock()
+	defer s.checksMu.Unlock()
+	if c, ok := s.checks[p.ID]; ok {
+		return providerView{p, &c}
+	}
+	return providerView{Provider: p}
+}
+
+// checkProvider verifies the key by listing models, so a bad credential shows up on save.
+func (s *Server) checkProvider(r *http.Request, p store.Provider) {
+	s.Gateway.ForgetModels(p.ID)
+	c := providerCheck{CheckedAt: time.Now().UTC()}
+	if p.Enabled {
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+		models, err := s.Gateway.Models(ctx, p, true)
+		if err != nil {
+			c.Error = err.Error()
+		} else {
+			c.OK, c.Models = true, len(models)
+		}
+	} else {
+		c.Error = "paused"
+	}
+	s.checksMu.Lock()
+	s.checks[p.ID] = c
+	s.checksMu.Unlock()
+}
+
 func (s *Server) providers(w http.ResponseWriter, r *http.Request) {
 	v, err := s.Store.Providers()
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return
 	}
-	writeJSON(w, 200, v)
+	out := make([]providerView, len(v))
+	for i, p := range v {
+		out[i] = s.view(p)
+	}
+	writeJSON(w, 200, out)
 }
 func (s *Server) createProvider(w http.ResponseWriter, r *http.Request) {
 	var in providerInput
 	if !decode(w, r, &in) {
 		return
 	}
-	p := in.provider()
-	if p.BaseURL == "" {
-		p.BaseURL = defaultBase(p.Type)
+	p, err := in.provider()
+	if err != nil {
+		writeError(w, 400, err.Error())
+		return
 	}
 	v, err := s.Store.CreateProvider(p)
 	if err != nil {
 		writeError(w, 400, store.ErrMessage(err))
 		return
 	}
-	v.APIKey = ""
-	writeJSON(w, 201, v)
+	s.checkProvider(r, v)
+	writeJSON(w, 201, s.view(v))
 }
 func (s *Server) updateProvider(w http.ResponseWriter, r *http.Request) {
 	var in providerInput
 	if !decode(w, r, &in) {
 		return
 	}
-	p := in.provider()
-	p.ID = chi.URLParam(r, "id")
-	if p.BaseURL == "" {
-		p.BaseURL = defaultBase(p.Type)
+	p, err := in.provider()
+	if err != nil {
+		writeError(w, 400, err.Error())
+		return
 	}
-	v, err := s.Store.UpdateProvider(p)
+	p.ID = chi.URLParam(r, "id")
+	v, err := s.Store.UpdateProvider(p, in.ExtraHeaders != nil)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, 404, "Provider not found.")
+		return
+	}
 	if err != nil {
 		writeError(w, 400, store.ErrMessage(err))
 		return
 	}
-	v.APIKey = ""
-	writeJSON(w, 200, v)
+	s.checkProvider(r, v)
+	writeJSON(w, 200, s.view(v))
 }
 func (s *Server) deleteProvider(w http.ResponseWriter, r *http.Request) {
-	if err := s.Store.DeleteProvider(chi.URLParam(r, "id")); err != nil {
-		writeError(w, 500, err.Error())
+	id := chi.URLParam(r, "id")
+	if err := s.Store.DeleteProvider(id); err != nil {
+		status := 500
+		if errors.Is(err, store.ErrProviderInUse) {
+			status = 409
+		}
+		writeError(w, status, err.Error())
 		return
 	}
+	s.Gateway.ForgetModels(id)
+	s.checksMu.Lock()
+	delete(s.checks, id)
+	s.checksMu.Unlock()
 	w.WriteHeader(204)
 }
 func (s *Server) models(w http.ResponseWriter, r *http.Request) {
@@ -356,7 +555,7 @@ func (s *Server) models(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "Provider not found.")
 		return
 	}
-	models, err := s.Gateway.Models(r.Context(), p)
+	models, err := s.Gateway.Models(r.Context(), p, r.URL.Query().Get("refresh") == "1")
 	if err != nil {
 		writeError(w, 502, err.Error())
 		return
@@ -381,34 +580,11 @@ func (s *Server) allModels(w http.ResponseWriter, r *http.Request) {
 			data = append(data, map[string]any{"id": "smart/" + p.Slug, "object": "model", "owned_by": "Nexa Smart Routing", "profile": p.Slug})
 		}
 	}
-	failed := 0
-	for _, p := range providers {
-		if !p.Enabled {
-			continue
-		}
-		models, err := s.Gateway.Models(r.Context(), p)
-		if err != nil {
-			failed++
-			continue
-		}
-		for _, model := range models {
-			id, _ := model["id"].(string)
-			if id == "" {
-				id, _ = model["name"].(string)
-			}
-			if id == "" {
-				continue
-			}
-			model["id"] = p.Slug + "/" + id
-			model["object"] = "model"
-			model["owned_by"] = p.Name
-			data = append(data, model)
-		}
-	}
+	models, failed := s.Gateway.AllModels(r.Context(), providers)
 	if failed > 0 {
 		w.Header().Set("X-Nexa-Provider-Errors", strconv.Itoa(failed))
 	}
-	writeJSON(w, 200, map[string]any{"object": "list", "data": data})
+	writeJSON(w, 200, map[string]any{"object": "list", "data": append(data, models...)})
 }
 
 func (s *Server) routingProfiles(w http.ResponseWriter, r *http.Request) {
@@ -461,6 +637,19 @@ func (s *Server) activateRoutingProfile(w http.ResponseWriter, r *http.Request) 
 	v.JevAPIKey = ""
 	writeJSON(w, 200, v)
 }
+
+// checkRoutingProfile makes a live, uncached Jev call with the profile's key.
+func (s *Server) checkRoutingProfile(w http.ResponseWriter, r *http.Request) {
+	p, e := s.Store.RoutingProfile(chi.URLParam(r, "id"))
+	if e != nil {
+		writeError(w, 404, "Routing profile not found.")
+		return
+	}
+	started := time.Now()
+	signals, engineErr := s.Gateway.Router.CheckJev(r.Context(), p)
+	writeJSON(w, 200, map[string]any{"ok": engineErr == "", "error": engineErr, "complexity": signals.Complexity, "confidence": signals.Confidence, "latency_ms": time.Since(started).Milliseconds()})
+}
+
 func (s *Server) evaluateRouting(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		ProfileID       string   `json:"profile_id"`
@@ -476,20 +665,22 @@ func (s *Server) evaluateRouting(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "Routing profile not found.")
 		return
 	}
-	payload := map[string]any{"max_completion_tokens": in.MaxOutputTokens}
+	messages := []any{map[string]any{"role": "user", "content": in.Prompt}}
+	if slicesContains(in.Capabilities, "vision") {
+		messages = append(messages, map[string]any{"role": "user", "content": []any{map[string]any{"type": "image_url", "image_url": map[string]any{"url": "https://example.invalid/image.png"}}}})
+	}
+	raw, _ := json.Marshal(messages)
+	payload := map[string]any{"max_completion_tokens": float64(in.MaxOutputTokens), "messages": messages}
 	if slicesContains(in.Capabilities, "tools") {
 		payload["tools"] = []any{map[string]any{}}
 	}
 	if slicesContains(in.Capabilities, "json") {
 		payload["response_format"] = map[string]any{"type": "json_object"}
 	}
-	d, e := s.Gateway.Router.Decide(r.Context(), p, in.Prompt, payload)
+	d, e := s.Gateway.Router.Decide(r.Context(), p, raw, payload)
 	if e != nil {
 		writeError(w, 400, e.Error())
 		return
-	}
-	for i := range d.Ranked {
-		d.Ranked[i].Provider = store.Provider{}
 	}
 	writeJSON(w, 200, d)
 }
@@ -502,9 +693,13 @@ func slicesContains(v []string, x string) bool {
 	return false
 }
 func (s *Server) traces(w http.ResponseWriter, r *http.Request) {
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-	v, total, err := s.Store.Traces(limit, offset, r.URL.Query().Get("search"), r.URL.Query().Get("status"))
+	q := r.URL.Query()
+	f := store.TraceQuery{Search: q.Get("search"), Status: q.Get("status"), ProviderID: q.Get("provider"), Model: q.Get("model")}
+	f.Limit, _ = strconv.Atoi(q.Get("limit"))
+	f.Offset, _ = strconv.Atoi(q.Get("offset"))
+	f.From, _ = time.Parse(time.RFC3339, q.Get("from"))
+	f.To, _ = time.Parse(time.RFC3339, q.Get("to"))
+	v, total, err := s.Store.Traces(f)
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return
@@ -519,6 +714,11 @@ func (s *Server) trace(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, v)
 }
+
+func (s *Server) playground(w http.ResponseWriter, r *http.Request) {
+	s.Gateway.ChatCompletions(w, gateway.Annotate(r, "playground", who(r).Username))
+}
+
 func (s *Server) users(w http.ResponseWriter, r *http.Request) {
 	v, err := s.Store.Users()
 	if err != nil {
@@ -539,8 +739,32 @@ func (s *Server) createUser(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 201, v)
 }
+func (s *Server) updateUser(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var in struct {
+		Role     string `json:"role"`
+		Password string `json:"password"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	if who(r).UserID == id && in.Role != "" {
+		writeError(w, 400, "You cannot change your own role.")
+		return
+	}
+	v, err := s.Store.UpdateUser(id, in.Role, in.Password, "")
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, 404, "User not found.")
+		return
+	}
+	if err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, 200, v)
+}
 func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("X-Nexa-User") == chi.URLParam(r, "id") {
+	if who(r).UserID == chi.URLParam(r, "id") {
 		writeError(w, 400, "You cannot delete your current account.")
 		return
 	}
@@ -550,8 +774,66 @@ func (s *Server) deleteUser(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(204)
 }
+
+func (s *Server) prices(w http.ResponseWriter, r *http.Request) {
+	builtin := []store.Price{}
+	for model, p := range gateway.BuiltinPrices() {
+		builtin = append(builtin, store.Price{Model: model, Input: p[0], Output: p[1]})
+	}
+	writeJSON(w, 200, map[string]any{"custom": s.Store.Prices(), "builtin": builtin})
+}
+func (s *Server) setPrice(w http.ResponseWriter, r *http.Request) {
+	var p store.Price
+	if !decode(w, r, &p) {
+		return
+	}
+	if err := s.Store.SetPrice(p); err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, 200, p)
+}
+func (s *Server) deletePrice(w http.ResponseWriter, r *http.Request) {
+	if err := s.Store.DeletePrice(r.URL.Query().Get("model")); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	w.WriteHeader(204)
+}
+
+func (s *Server) apiKeys(w http.ResponseWriter, r *http.Request) {
+	v, err := s.Store.APIKeys()
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, v)
+}
+func (s *Server) createAPIKey(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Name string `json:"name"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	k, plain, err := s.Store.CreateAPIKey(in.Name)
+	if err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	writeJSON(w, 201, map[string]any{"key": plain, "api_key": k, "warning": "This key is shown once. Save it now."})
+}
+func (s *Server) deleteAPIKey(w http.ResponseWriter, r *http.Request) {
+	if err := s.Store.DeleteAPIKey(chi.URLParam(r, "id")); err != nil {
+		writeError(w, 404, "API key not found.")
+		return
+	}
+	w.WriteHeader(204)
+}
+
+// rotateMaster signs out every master session, then re-issues one for the caller.
 func (s *Server) rotateMaster(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("X-Nexa-Master") != "1" {
+	if !who(r).Master {
 		writeError(w, 403, "Only the master administrator can rotate this key.")
 		return
 	}
@@ -559,6 +841,9 @@ func (s *Server) rotateMaster(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return
+	}
+	if token, err := s.Store.CreateSession("", true); err == nil {
+		s.setSession(w, token)
 	}
 	writeJSON(w, 200, map[string]string{"master_key": key, "warning": "This key is shown once. Save it now."})
 }

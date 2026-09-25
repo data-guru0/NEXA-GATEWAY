@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -58,6 +59,19 @@ func main() {
 		fmt.Fprintln(os.Stdout, "╰────────────────────────────────────────────────────────────╯")
 		fmt.Fprintln(os.Stdout)
 	}
+	retentionDays, err := strconv.Atoi(env("NEXA_TRACE_RETENTION_DAYS", "90"))
+	if err != nil || retentionDays < 0 {
+		log.Error("NEXA_TRACE_RETENTION_DAYS must be a whole number of days (0 keeps traces forever)")
+		os.Exit(1)
+	}
+	go func() {
+		for {
+			if err := db.Prune(time.Duration(retentionDays) * 24 * time.Hour); err != nil {
+				log.Warn("trace retention failed", "error", err)
+			}
+			time.Sleep(time.Hour)
+		}
+	}()
 	h := server.New(db, log, env("NEXA_SECURE_COOKIES", "") == "true")
 	srv := &http.Server{Addr: *addr, Handler: h, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 0, IdleTimeout: 120 * time.Second}
 	go func() {
