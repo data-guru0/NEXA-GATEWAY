@@ -153,8 +153,11 @@
             <label><span>TOP P <b id="top-p-value">1</b></span><input id="play-top-p" type="range" min="0" max="1" step="0.05" value="1"></label>
             <label><span>MAX OUTPUT TOKENS</span><input id="play-max-tokens" type="number" min="1" max="200000" value="1024"></label>
             <label><span>STOP SEQUENCES</span><input id="play-stop" placeholder="Comma separated, optional"></label>
-            <label class="toggle-row compact-toggle"><span><b>JSON mode</b><small>Ask the model for a JSON object</small></span><input id="play-json" type="checkbox"><i></i></label>
-            <label class="toggle-row compact-toggle"><span><b>Stream response</b><small>Tokens appear as they arrive</small></span><input id="play-stream" type="checkbox" checked><i></i></label>
+            <div class="switch-group">
+              <label class="switch-row"><span class="switch-copy"><b>Stream response</b><small>Tokens appear as they arrive</small></span><input id="play-stream" class="switch-input" type="checkbox" role="switch" checked><span class="switch" aria-hidden="true"><i></i></span></label>
+              <label class="switch-row"><span class="switch-copy"><b>JSON mode</b><small>Reply must be one valid JSON object</small></span><input id="play-json" class="switch-input" type="checkbox" role="switch"><span class="switch" aria-hidden="true"><i></i></span></label>
+              <p id="json-hint" class="switch-hint hidden">Describe the fields you want in your message. If no message mentions JSON, Nexa adds a short instruction, because OpenAI and Groq reject JSON mode without one.</p>
+            </div>
             <button id="clear-chat" class="outline-button full">Clear conversation</button>
           </aside>
           <div class="chat-stage">

@@ -116,6 +116,8 @@ function bindEvents() {
   $('#chat-form').addEventListener('submit', sendChat); $('#chat-input').addEventListener('keydown', e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') $('#chat-form').requestSubmit(); });
   $('#clear-chat').addEventListener('click', clearChat);
   $('#play-system').addEventListener('change', saveConversation);
+  ['#play-stream', '#play-json'].forEach(id => $(id).addEventListener('change', savePlaygroundPrefs));
+  $('#play-json').addEventListener('change', updateJsonHint);
   $$('.code-tabs [data-code]').forEach(x => x.addEventListener('click', () => { state.code = x.dataset.code; $$('.code-tabs button').forEach(y => y.classList.toggle('active', x === y)); renderSDK(); }));
   $('#copy-sdk').addEventListener('click', () => copyText($('#sdk-code').textContent));
   $('#rotate-key').addEventListener('click', rotateKey); $('#copy-master-key').addEventListener('click', () => copyText($('#new-master-key').textContent));
@@ -158,7 +160,7 @@ function showApp() {
   $('#user-name').textContent = state.user.username; $('#user-role').textContent = state.user.role.toUpperCase(); $('#user-initial').textContent = initials(state.user.username);
   document.body.classList.toggle('is-member', !isAdmin()); document.body.classList.toggle('not-master', !state.user.master);
   $('#change-password').classList.toggle('hidden', !!state.user.master);
-  restoreConversation();
+  restoreConversation(); restorePlaygroundPrefs();
   route(); loadProviders(false); loadRoutingProfiles(false); loadStats();
 }
 
@@ -441,7 +443,7 @@ function openInPlayground(t) {
   $('#play-system').value = system; $('#chat-input').value = lastUser ? text(lastUser) : '';
   if (req.temperature !== undefined) { $('#play-temperature').value = req.temperature; $('#temperature-value').textContent = req.temperature; }
   if (req.max_completion_tokens || req.max_tokens) $('#play-max-tokens').value = req.max_completion_tokens || req.max_tokens;
-  $('#play-json').checked = req.response_format?.type === 'json_object';
+  $('#play-json').checked = req.response_format?.type === 'json_object'; updateJsonHint();
   renderConversation(); saveConversation(); $('#trace-dialog').close();
   if (location.hash === '#playground') renderProviderSelect(); else location.hash = '#playground';
 }
@@ -464,6 +466,21 @@ function updateChatRoute() { const smart = $('#play-provider').value === '__smar
 function welcomeHTML() { return '<div class="chat-welcome"><div class="welcome-glyph">N</div><h2>Test the route.</h2><p>Select a provider and model, then send a message. This is a real request and will appear in Traces.</p></div>'; }
 function clearChat() { if (state.abort) state.abort.abort(); state.conversation = []; $('#chat-messages').innerHTML = welcomeHTML(); $('#chat-metrics').textContent = 'READY'; saveConversation(); }
 function saveConversation() { store.set('nexa.playground', { conversation: state.conversation, system: $('#play-system').value }); }
+function updateJsonHint() { $('#json-hint').classList.toggle('hidden', !$('#play-json').checked); }
+function savePlaygroundPrefs() { store.set('nexa.playground.prefs', { stream: $('#play-stream').checked, json: $('#play-json').checked }); }
+function restorePlaygroundPrefs() { const prefs = store.get('nexa.playground.prefs', {}); if (typeof prefs.stream === 'boolean') $('#play-stream').checked = prefs.stream; if (typeof prefs.json === 'boolean') $('#play-json').checked = prefs.json; updateJsonHint(); }
+// OpenAI and Groq reject json_object unless a message mentions JSON, so the playground adds the
+// instruction only when the conversation does not already say it.
+function withJsonInstruction(messages) {
+  if (messages.some(m => /json/i.test(typeof m.content === 'string' ? m.content : JSON.stringify(m.content)))) return messages;
+  const note = 'Respond with a single valid JSON object.';
+  if (messages[0]?.role === 'system') return [{ ...messages[0], content: `${messages[0].content}\n\n${note}` }, ...messages.slice(1)];
+  return [{ role: 'system', content: note }, ...messages];
+}
+function jsonReplyHTML(content) {
+  try { const parsed = JSON.parse(content.trim()); return `${renderMarkdown('```json\n' + JSON.stringify(parsed, null, 2) + '\n```')}<span class="json-note ok">✓ VALID JSON</span>`; }
+  catch { return `${renderMarkdown(content)}<span class="json-note bad">✕ NOT VALID JSON</span>`; }
+}
 function restoreConversation() { const saved = store.get('nexa.playground', null); if (!saved) return; state.conversation = Array.isArray(saved.conversation) ? saved.conversation : []; if (typeof saved.system === 'string') $('#play-system').value = saved.system; renderConversation(); }
 function renderConversation() { $('#chat-messages').innerHTML = state.conversation.length ? '' : welcomeHTML(); state.conversation.forEach(m => addMessage(m.role, m.content)); }
 function addMessage(role, content, loading = false) { $('.chat-welcome')?.remove(); const item = document.createElement('div'); item.className = `chat-message ${role}`; item.innerHTML = `<span class="role">${role === 'user' ? 'YOU' : 'NEXA'}</span><div class="bubble markdown-body ${loading ? 'typing' : ''}">${role === 'assistant' && !loading ? renderMarkdown(content) : esc(content)}</div>`; $('#chat-messages').append(item); $('#chat-messages').scrollTop = $('#chat-messages').scrollHeight; return item; }
@@ -486,7 +503,8 @@ async function sendChat(e) {
   if (!$('#play-temperature').disabled) request.temperature = Number($('#play-temperature').value);
   if (Number($('#play-top-p').value) !== 1) request.top_p = Number($('#play-top-p').value);
   const stops = $('#play-stop').value.split(',').map(s => s.trim()).filter(Boolean); if (stops.length) request.stop = stops;
-  if ($('#play-json').checked) request.response_format = { type: 'json_object' };
+  const jsonMode = $('#play-json').checked;
+  if (jsonMode) { request.response_format = { type: 'json_object' }; request.messages = withJsonInstruction(messages); }
   state.abort = new AbortController(); setSending(true); $('#chat-metrics').textContent = 'REQUEST IN FLIGHT…';
   let content = '', usage = null, ttft = 0, traceID = '', stopped = false, frame = 0;
   const paint = () => { frame = 0; bubble.innerHTML = renderMarkdown(content || '…'); $('#chat-messages').scrollTop = $('#chat-messages').scrollHeight; };
@@ -520,7 +538,7 @@ async function sendChat(e) {
     else { if (frame) cancelAnimationFrame(frame); bubble.classList.remove('typing'); bubble.textContent = `Request failed: ${err.message}`; $('#chat-metrics').innerHTML = `ERROR${traceID ? ` · <button class="metric-link" data-trace-id="${esc(traceID)}">TRACE ↗</button>` : ''}`; state.abort = null; setSending(false); loadStats(); return; }
   }
   if (frame) cancelAnimationFrame(frame);
-  bubble.classList.remove('typing'); bubble.innerHTML = renderMarkdown(content + (stopped ? '\n\n*(stopped)*' : ''));
+  bubble.classList.remove('typing'); bubble.innerHTML = jsonMode && content && !stopped ? jsonReplyHTML(content) : renderMarkdown(content + (stopped ? '\n\n*(stopped)*' : ''));
   if (content) { state.conversation.push({ role: 'assistant', content }); saveConversation(); }
   const parts = [`${Math.round(performance.now() - started)} MS`]; if (ttft) parts.push(`FIRST TOKEN ${Math.round(ttft)} MS`); if (usage) parts.push(`${fmtNum(usage.total_tokens)} TOKENS`); if (stopped) parts.push('STOPPED');
   $('#chat-metrics').innerHTML = `${esc(parts.join(' · '))}${traceID ? ` · <button class="metric-link" data-trace-id="${esc(traceID)}">TRACE ↗</button>` : ''}`;
