@@ -29,24 +29,24 @@ For HTTPS deployments, terminate TLS in a reverse proxy and set `NEXA_SECURE_COO
 
 ## Connect an application
 
-Add a provider in the dashboard, note its routing slug, and use `slug/model` as the model name:
+Add a provider in the dashboard (its key is verified on save), create a per-app API key under **Access → API keys**, and use `slug/model` as the model name:
 
 ```python
 from openai import OpenAI
 
 client = OpenAI(
-    api_key="nexa_YOUR_MASTER_KEY",
+    api_key="nexa_sk_YOUR_APP_KEY",  # or the master key
     base_url="http://localhost:8080/v1",
 )
 
 response = client.chat.completions.create(
-    model="groq/llama-3.3-70b-versatile",
+    model="groq/openai/gpt-oss-20b",
     messages=[{"role": "user", "content": "Hello from Nexa"}],
 )
 print(response.choices[0].message.content)
 ```
 
-With exactly one enabled provider, bare model names also work. You can alternatively select a provider using the `X-Nexa-Provider` header.
+With exactly one enabled provider, bare model names also work — including ids that contain a slash, such as `openai/gpt-oss-20b` on Groq. You can alternatively select a provider using the `X-Nexa-Provider` header. Every response carries an `X-Nexa-Trace-Id` header that identifies the matching trace.
 
 ## Configuration
 
@@ -57,6 +57,7 @@ With exactly one enabled provider, bare model names also work. You can alternati
 | `NEXA_SECURE_COOKIES` | `false` | Require HTTPS for dashboard session cookies |
 | `JEV_API_KEY` | empty | Optional TypeSafe Jev key for Jev-based routing profiles |
 | `TYPESAFE_API_KEY` | empty | Official TypeSafe key name; used when `JEV_API_KEY` is empty |
+| `NEXA_TRACE_RETENTION_DAYS` | `90` | Delete traces older than this many days (`0` keeps them forever) |
 
 The provider encryption key is generated at `NEXA_DATA/secret.key`; back it up together with `nexa.db`. Losing it makes saved provider credentials unrecoverable.
 
@@ -66,32 +67,37 @@ If the master key is lost, rotate it using the same persistent volume:
 docker compose run --rm nexa-gateway -reset-master
 ```
 
-This prints the replacement once and immediately invalidates the previous master key.
+This prints the replacement once, immediately invalidates the previous master key, and signs out every master session.
 
 ## Supported API
 
-- `POST /v1/chat/completions` — OpenAI-compatible chat completions, including streaming
-- `GET /v1/models` — live model catalog aggregated from enabled providers
+- `POST /v1/chat/completions` — OpenAI-compatible chat completions, including streaming (authenticate with the master key or a per-app API key)
+- `GET /v1/models` — model catalog aggregated in parallel from enabled providers and cached for five minutes
 - `GET /healthz` — container health
 - Dashboard APIs under `/api/*` use an HTTP-only session cookie
 
-OpenAI, Groq, Gemini, and custom compatible routes pass the OpenAI request through. Anthropic messages are translated in both directions; text streaming and standard function tools are supported.
+OpenAI, Groq, Gemini, and custom compatible routes pass the OpenAI request through; direct routes retry one `429`/`5xx`/network failure, honouring `Retry-After`, and forward `Retry-After` and `x-ratelimit-*` headers. Streamed calls record token usage even when the client did not request it (Nexa asks OpenAI/Groq for usage and hides that extra chunk). Anthropic is translated in both directions: system prompts, images, tool definitions, `tool_choice`, multi-turn tool calls and results, stop sequences, streamed text and streamed tool calls, cache-read tokens, and errors in OpenAI shape. Custom providers can send extra headers on every request.
+
+Traces capture every call — including rejected ones — with the current turn, the full request, parameters, response and tool calls, finish reason, input/output/cached/reasoning tokens, time to first token, provider versus Nexa latency, cost, caller (API key or dashboard user) and request id. Cost uses a built-in price table plus prices you add under **Providers → Model pricing** (`model*` matches a prefix).
 
 ## Smart routing
 
 Create a profile in **Smart Routing**, add model targets from any configured provider, and activate one profile as the default. Applications can then use `smart` as the model name. A specific profile is addressable as `smart/profile-slug` even when it is not the active default.
 
-Prompt difficulty is decided by **Jev by TypeSafe**, which returns a semantic choice and a confidence score through the System One API. Supply `JEV_API_KEY` or enter a key in the profile editor; entered keys are AES-256-GCM encrypted. If no key is configured or Jev is unreachable, the request is routed to the Heavy lane and the reason is recorded in the trace.
+Prompt difficulty is decided by **Jev by TypeSafe**, which reads the system prompt and the latest turns and returns a difficulty with a confidence score. Decisions are cached for ten minutes. Supply `JEV_API_KEY` or enter a key in the profile editor (AES-256-GCM encrypted); **TEST JEV** on a profile card makes a live check. If Jev is unavailable, the profile's chosen fallback lane (Medium by default) is used and the reason is recorded in the trace. When Jev's confidence is below the profile threshold, Nexa moves one lane up.
 
-Smart routing selects between Light, Medium, and Heavy model lanes from prompt difficulty. Requests retry retryable failures (`408`, `409`, `425`, `429`, and `5xx`) before moving through the real fallback ladder. A route advances to its configured fallback only after a real request failure; Jev confidence and route-health history do not silently move a request to a different difficulty lane.
+Smart routing selects between Light, Medium, and Heavy model lanes. Lanes can declare that a model lacks tools, vision, or JSON mode, and requests needing those skip them; among equally matched lanes a healthy route is preferred. Retryable failures (`408`, `409`, `425`, `429`, `5xx`, and first-byte timeouts) are retried and then move down the fallback ladder; `401`/`403`/`404` skip to the next lane; any other `4xx` stops immediately because every lane would reject the same request. A client disconnect stops routing without counting against provider health.
 
-Smart routes buffer streaming responses until an upstream attempt succeeds so that failover remains possible. Direct `provider/model` routes retain their existing streaming behavior.
+An attempt stays private until its provider answers `2xx`; from then on the response streams straight to the client, so smart routes keep both failover and real streaming. The per-profile timeout only covers the wait for a provider to start answering — a long generation already in progress is never cut off. Responses include `X-Nexa-Routed-Model`, `X-Nexa-Routing-Lane`, and `X-Nexa-Routing-Confidence`. The **Try a prompt** panel previews the decision for any prompt.
 
 ## Security model
 
-- The master key is bcrypt-hashed; its plaintext is shown only on creation or rotation.
-- Provider API keys are encrypted at rest with AES-256-GCM.
-- Dashboard sessions are HTTP-only, SameSite Strict, expire after seven days, and enforce same-origin writes.
+- The master key is stored as bcrypt and SHA-256 digests; the 192-bit random key is checked with a constant-time SHA-256 compare so API calls do not pay bcrypt's cost. Its plaintext is shown only on creation or rotation.
+- Per-app API keys (`nexa_sk_…`) are stored only as SHA-256 digests, shown once, named in traces, and revocable.
+- Provider API keys and extra headers are encrypted at rest with AES-256-GCM.
+- Roles are enforced server-side: the master owner can do everything; admins manage providers, routing, pricing, users and API keys; members can view and use the playground. Identity comes only from the session, never from request headers.
+- Dashboard sessions are HTTP-only, SameSite Strict, stored as SHA-256 digests, expire after seven days, and enforce same-origin writes. Changing or resetting a password signs out the user's other sessions.
+- Ten failed sign-ins from one address lock sign-in for ten minutes; unknown usernames take as long to reject as wrong passwords.
 - Secrets are never returned by provider-list APIs or written to request logs.
 
 All application code and embedded assets live in this `GATEWAY` directory. Black-box test tooling is intentionally isolated in the sibling `TESTING` directory.
