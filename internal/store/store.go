@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -89,6 +90,55 @@ type User struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// RoutingProfile is a dashboard-managed virtual model. Targets are deliberately
+// provider-agnostic: any enabled Nexa provider/model pair can participate.
+type RoutingProfile struct {
+	ID                  string          `json:"id"`
+	Name                string          `json:"name"`
+	Slug                string          `json:"slug"`
+	Engine              string          `json:"engine"`
+	Objective           string          `json:"objective"`
+	QualityWeight       float64         `json:"quality_weight"`
+	CostWeight          float64         `json:"cost_weight"`
+	LatencyWeight       float64         `json:"latency_weight"`
+	ConfidenceThreshold float64         `json:"confidence_threshold"`
+	MaxRetries          int             `json:"max_retries"`
+	RequestTimeoutMS    int             `json:"request_timeout_ms"`
+	Active              bool            `json:"active"`
+	JevAPIKey           string          `json:"jev_api_key,omitempty"`
+	JevKeyConfigured    bool            `json:"jev_key_configured"`
+	Targets             []RoutingTarget `json:"targets"`
+	Rules               []RoutingRule   `json:"rules"`
+	CreatedAt           time.Time       `json:"created_at"`
+	UpdatedAt           time.Time       `json:"updated_at"`
+}
+
+type RoutingTarget struct {
+	ID                   string   `json:"id"`
+	ProviderID           string   `json:"provider_id"`
+	Model                string   `json:"model"`
+	Tier                 string   `json:"tier"`
+	Description          string   `json:"description"`
+	TaskTypes            []string `json:"task_types"`
+	Capabilities         []string `json:"capabilities"`
+	ContextWindow        int      `json:"context_window"`
+	MaxOutputTokens      int      `json:"max_output_tokens"`
+	InputCostPerMillion  float64  `json:"input_cost_per_million"`
+	OutputCostPerMillion float64  `json:"output_cost_per_million"`
+	QualityScore         float64  `json:"quality_score"`
+	Priority             int      `json:"priority"`
+	Enabled              bool     `json:"enabled"`
+}
+
+type RoutingRule struct {
+	ID       string `json:"id"`
+	Field    string `json:"field"`
+	Operator string `json:"operator"`
+	Value    string `json:"value"`
+	Action   string `json:"action"`
+	TargetID string `json:"target_id"`
+}
+
 func Open(dataDir string) (*Store, string, error) {
 	if err := os.MkdirAll(dataDir, 0700); err != nil {
 		return nil, "", err
@@ -163,8 +213,22 @@ CREATE TABLE IF NOT EXISTS traces (
  error TEXT NOT NULL DEFAULT '', metadata TEXT NOT NULL DEFAULT '',
  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE TABLE IF NOT EXISTS routing_profiles (
+ id TEXT PRIMARY KEY, name TEXT NOT NULL, slug TEXT NOT NULL UNIQUE COLLATE NOCASE,
+ engine TEXT NOT NULL, objective TEXT NOT NULL, config_json TEXT NOT NULL,
+ jev_api_key TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 0,
+ created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS routing_attempts (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, provider_id TEXT NOT NULL, model TEXT NOT NULL,
+ status TEXT NOT NULL, latency_ms REAL NOT NULL DEFAULT 0,
+ created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 CREATE INDEX IF NOT EXISTS idx_traces_created ON traces(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_traces_provider ON traces(provider_id);
+CREATE INDEX IF NOT EXISTS idx_routing_active ON routing_profiles(active);
+CREATE INDEX IF NOT EXISTS idx_routing_attempt_health ON routing_attempts(provider_id,model,created_at DESC);
 `)
 	if err != nil {
 		return err
@@ -172,7 +236,15 @@ CREATE INDEX IF NOT EXISTS idx_traces_provider ON traces(provider_id);
 	if err := s.ensureColumn("traces", "upstream_latency_ms", "REAL NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
-	return s.ensureColumn("traces", "gateway_latency_ms", "REAL NOT NULL DEFAULT 0")
+	if err := s.ensureColumn("traces", "gateway_latency_ms", "REAL NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	// The bundled local classifier was removed; existing profiles move to Jev.
+	if _, err = s.DB.Exec("UPDATE routing_profiles SET engine='jev' WHERE engine!='jev'"); err != nil {
+		return err
+	}
+	_, err = s.DB.Exec("DELETE FROM routing_attempts WHERE created_at<? OR provider_id NOT IN (SELECT id FROM providers)", time.Now().UTC().Add(-24*time.Hour))
+	return err
 }
 
 func (s *Store) ensureColumn(table, column, definition string) error {
@@ -344,8 +416,253 @@ func (s *Store) Providers() ([]Provider, error) {
 }
 
 func (s *Store) DeleteProvider(id string) error {
-	_, err := s.DB.Exec("DELETE FROM providers WHERE id=?", id)
-	return err
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec("DELETE FROM routing_attempts WHERE provider_id=?", id); err != nil {
+		return err
+	}
+	if _, err = tx.Exec("DELETE FROM providers WHERE id=?", id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func normalizeRoutingProfile(p *RoutingProfile) error {
+	p.Name = strings.TrimSpace(p.Name)
+	p.Slug = slugify(p.Slug)
+	if p.Slug == "" {
+		p.Slug = slugify(p.Name)
+	}
+	if p.Name == "" || p.Slug == "" {
+		return errors.New("profile name and slug are required")
+	}
+	p.Engine = "jev" // ponytail: Jev is the only engine; field kept for API/trace compatibility
+	switch p.Objective {
+	case "balanced", "lowest_cost", "lowest_latency", "highest_quality", "custom":
+	default:
+		return errors.New("unsupported optimization objective")
+	}
+	if len(p.Targets) == 0 {
+		return errors.New("add at least one routing target")
+	}
+	if p.ConfidenceThreshold <= 0 || p.ConfidenceThreshold > 1 {
+		p.ConfidenceThreshold = .62
+	}
+	if p.MaxRetries < 0 {
+		p.MaxRetries = 0
+	}
+	if p.MaxRetries > 5 {
+		p.MaxRetries = 5
+	}
+	if p.RequestTimeoutMS < 1000 {
+		p.RequestTimeoutMS = 30000
+	}
+	if p.RequestTimeoutMS > 600000 {
+		p.RequestTimeoutMS = 600000
+	}
+	if p.Objective != "custom" {
+		p.QualityWeight, p.CostWeight, p.LatencyWeight = 50, 30, 20
+	}
+	if p.QualityWeight+p.CostWeight+p.LatencyWeight <= 0 {
+		return errors.New("optimization weights must total more than zero")
+	}
+	seen := map[string]bool{}
+	enabledTargets := 0
+	for i := range p.Targets {
+		t := &p.Targets[i]
+		if t.ID == "" {
+			t.ID = uuid.NewString()
+		}
+		if t.ProviderID == "" || strings.TrimSpace(t.Model) == "" {
+			return errors.New("every target needs a provider and model")
+		}
+		if seen[t.ID] {
+			return errors.New("target IDs must be unique")
+		}
+		seen[t.ID] = true
+		if t.Tier != "low" && t.Tier != "medium" && t.Tier != "high" {
+			t.Tier = "medium"
+		}
+		if t.QualityScore <= 0 {
+			t.QualityScore = 70
+		}
+		if t.QualityScore > 100 {
+			t.QualityScore = 100
+		}
+		if t.ContextWindow <= 0 {
+			t.ContextWindow = 128000
+		}
+		if t.MaxOutputTokens <= 0 {
+			t.MaxOutputTokens = 8192
+		}
+		if t.Enabled {
+			enabledTargets++
+		}
+	}
+	if enabledTargets == 0 {
+		for i := range p.Targets {
+			p.Targets[i].Enabled = true
+		}
+	}
+	return nil
+}
+
+func (s *Store) CreateRoutingProfile(p RoutingProfile) (RoutingProfile, error) {
+	if err := normalizeRoutingProfile(&p); err != nil {
+		return p, err
+	}
+	p.ID = uuid.NewString()
+	now := time.Now().UTC()
+	p.CreatedAt, p.UpdatedAt = now, now
+	for i := range p.Rules {
+		if p.Rules[i].ID == "" {
+			p.Rules[i].ID = uuid.NewString()
+		}
+	}
+	stored := p
+	stored.JevAPIKey = ""
+	config, _ := json.Marshal(stored)
+	key := ""
+	var err error
+	if p.JevAPIKey != "" {
+		key, err = s.encrypt(p.JevAPIKey)
+		if err != nil {
+			return p, err
+		}
+	}
+	_, err = s.DB.Exec("INSERT INTO routing_profiles(id,name,slug,engine,objective,config_json,jev_api_key,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)", p.ID, p.Name, p.Slug, p.Engine, p.Objective, string(config), key, false, now, now)
+	if err != nil {
+		return p, err
+	}
+	p.JevKeyConfigured = p.JevAPIKey != "" || os.Getenv("JEV_API_KEY") != "" || os.Getenv("TYPESAFE_API_KEY") != ""
+	p.JevAPIKey = ""
+	return p, nil
+}
+
+func (s *Store) UpdateRoutingProfile(p RoutingProfile) (RoutingProfile, error) {
+	current, err := s.RoutingProfile(p.ID)
+	if err != nil {
+		return p, err
+	}
+	if err = normalizeRoutingProfile(&p); err != nil {
+		return p, err
+	}
+	p.Active, p.CreatedAt, p.UpdatedAt = current.Active, current.CreatedAt, time.Now().UTC()
+	for i := range p.Rules {
+		if p.Rules[i].ID == "" {
+			p.Rules[i].ID = uuid.NewString()
+		}
+	}
+	stored := p
+	stored.JevAPIKey = ""
+	config, _ := json.Marshal(stored)
+	if p.JevAPIKey != "" {
+		enc, e := s.encrypt(p.JevAPIKey)
+		if e != nil {
+			return p, e
+		}
+		_, err = s.DB.Exec("UPDATE routing_profiles SET name=?,slug=?,engine=?,objective=?,config_json=?,jev_api_key=?,updated_at=? WHERE id=?", p.Name, p.Slug, p.Engine, p.Objective, string(config), enc, p.UpdatedAt, p.ID)
+	} else {
+		_, err = s.DB.Exec("UPDATE routing_profiles SET name=?,slug=?,engine=?,objective=?,config_json=?,updated_at=? WHERE id=?", p.Name, p.Slug, p.Engine, p.Objective, string(config), p.UpdatedAt, p.ID)
+	}
+	if err != nil {
+		return p, err
+	}
+	return s.RoutingProfile(p.ID)
+}
+
+func (s *Store) scanRouting(row interface{ Scan(...any) error }) (RoutingProfile, error) {
+	var p RoutingProfile
+	var config, enc string
+	var id, name, slug, engine, objective string
+	var active bool
+	var created, updated time.Time
+	err := row.Scan(&id, &name, &slug, &engine, &objective, &config, &enc, &active, &created, &updated)
+	if err != nil {
+		return p, err
+	}
+	if err = json.Unmarshal([]byte(config), &p); err != nil {
+		return p, err
+	}
+	p.ID, p.Name, p.Slug, p.Engine, p.Objective, p.Active, p.CreatedAt, p.UpdatedAt = id, name, slug, engine, objective, active, created, updated
+	if enc != "" {
+		p.JevAPIKey, err = s.decrypt(enc)
+		if err != nil {
+			return p, err
+		}
+	}
+	p.JevKeyConfigured = p.JevAPIKey != "" || os.Getenv("JEV_API_KEY") != "" || os.Getenv("TYPESAFE_API_KEY") != ""
+	return p, nil
+}
+
+func (s *Store) RoutingProfile(idOrSlug string) (RoutingProfile, error) {
+	return s.scanRouting(s.DB.QueryRow("SELECT id,name,slug,engine,objective,config_json,jev_api_key,active,created_at,updated_at FROM routing_profiles WHERE id=? OR slug=?", idOrSlug, idOrSlug))
+}
+func (s *Store) ActiveRoutingProfile() (RoutingProfile, error) {
+	return s.scanRouting(s.DB.QueryRow("SELECT id,name,slug,engine,objective,config_json,jev_api_key,active,created_at,updated_at FROM routing_profiles WHERE active=1 LIMIT 1"))
+}
+func (s *Store) RoutingProfiles() ([]RoutingProfile, error) {
+	rows, err := s.DB.Query("SELECT id,name,slug,engine,objective,config_json,jev_api_key,active,created_at,updated_at FROM routing_profiles ORDER BY active DESC,updated_at DESC")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []RoutingProfile{}
+	for rows.Next() {
+		p, e := s.scanRouting(rows)
+		if e != nil {
+			return nil, e
+		}
+		p.JevAPIKey = ""
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+func (s *Store) ActivateRoutingProfile(id string) error {
+	tx, e := s.DB.Begin()
+	if e != nil {
+		return e
+	}
+	defer tx.Rollback()
+	if _, e = tx.Exec("UPDATE routing_profiles SET active=0"); e != nil {
+		return e
+	}
+	res, e := tx.Exec("UPDATE routing_profiles SET active=1,updated_at=? WHERE id=?", time.Now().UTC(), id)
+	if e != nil {
+		return e
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return sql.ErrNoRows
+	}
+	return tx.Commit()
+}
+func (s *Store) DeleteRoutingProfile(id string) error {
+	_, e := s.DB.Exec("DELETE FROM routing_profiles WHERE id=?", id)
+	return e
+}
+
+type RouteHealth struct {
+	Requests     int
+	Failures     int
+	AvgLatencyMS float64
+}
+
+func (s *Store) RoutingHealth(providerID, model string) RouteHealth {
+	var h RouteHealth
+	since := time.Now().UTC().Add(-30 * time.Minute)
+	_ = s.DB.QueryRow(`SELECT COUNT(*),COALESCE(SUM(CASE WHEN status!='success' THEN 1 ELSE 0 END),0),COALESCE(AVG(latency),0) FROM (
+	 SELECT status,upstream_latency_ms AS latency FROM traces WHERE provider_id=? AND model=? AND created_at>=?
+	 UNION ALL
+	 SELECT status,latency_ms AS latency FROM routing_attempts WHERE provider_id=? AND model=? AND created_at>=?
+	)`, providerID, model, since, providerID, model, since).Scan(&h.Requests, &h.Failures, &h.AvgLatencyMS)
+	return h
+}
+func (s *Store) RecordRoutingFailure(providerID, model string, latencyMS float64) {
+	_, _ = s.DB.Exec("INSERT INTO routing_attempts(provider_id,model,status,latency_ms,created_at) VALUES(?,?,?,?,?)", providerID, model, "error", latencyMS, time.Now().UTC())
 }
 
 func slugify(v string) string {

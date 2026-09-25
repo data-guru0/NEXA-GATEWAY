@@ -62,6 +62,7 @@
       <nav class="main-nav" aria-label="Main navigation">
         <a href="#overview" data-route="overview" class="active"><span class="nav-icon">⌁</span><b>Overview</b><small>01</small></a>
         <a href="#providers" data-route="providers"><span class="nav-icon">◇</span><b>Providers</b><small>02</small></a>
+        <a href="#routing" data-route="routing"><span class="nav-icon">⇌</span><b>Smart Routing</b><small>03</small></a>
         <a href="#traces" data-route="traces"><span class="nav-icon">⌇</span><b>Traces</b><small>03</small></a>
         <a href="#playground" data-route="playground"><span class="nav-icon">↗</span><b>Playground</b><small>04</small></a>
         <a href="#team" data-route="team"><span class="nav-icon">◎</span><b>Access</b><small>05</small></a>
@@ -111,6 +112,16 @@
         <div class="page-title-row"><div><div class="section-code">02 — CONNECTIONS</div><h1>Provider fabric</h1><p>Credentials are AES-256 encrypted before they touch disk.</p></div><button class="primary-action compact" data-open-provider><span>Add provider</span><b>＋</b></button></div>
         <div id="provider-grid" class="provider-grid"></div>
         <div class="integration-note"><span>ROUTING CONVENTION</span><div><code>provider-slug/model-name</code><button data-copy="provider-slug/model-name">COPY</button></div><p>Use this model value with any OpenAI SDK pointed at Nexa. A single configured provider also accepts bare model names.</p></div>
+      </section>
+
+      <section id="page-routing" class="page">
+        <div class="page-title-row"><div><div class="section-code">03 — DECISION FABRIC</div><h1>Smart routing</h1><p>Match every prompt to the right model lane through one resilient virtual model.</p></div><button id="new-routing-profile" class="primary-action compact"><span>New profile</span><b>＋</b></button></div>
+        <div class="routing-hero">
+          <div class="routing-orbit" aria-hidden="true"><span>PROMPT</span><i></i><b>N</b><i></i><span>BEST ROUTE</span></div>
+          <div><span class="panel-kicker">ONE DROP-IN MODEL</span><h2>Call <code>smart</code>. Nexa decides the rest.</h2><p>Jev measures prompt difficulty, chooses the matching model lane, and keeps real provider fallbacks ready if that route fails.</p></div>
+          <button data-copy="smart">COPY MODEL ID</button>
+        </div>
+        <div id="routing-profiles" class="routing-profiles"></div>
       </section>
 
       <section id="page-traces" class="page">
@@ -167,6 +178,18 @@
       <label class="toggle-row"><span><b>Connection enabled</b><small>Allow live traffic to use this route</small></span><input id="provider-enabled" type="checkbox" checked><i></i></label>
       <div id="provider-error" class="form-error hidden"></div>
       <footer><button type="button" class="outline-button" data-close-dialog>Cancel</button><button type="submit" class="primary-action compact"><span>Save connection</span><b>↗</b></button></footer>
+    </form>
+  </dialog>
+
+  <dialog id="routing-dialog" class="modal routing-modal">
+    <form id="routing-form" method="dialog">
+      <header><div><span class="section-code">ROUTING / PROFILE</span><h2 id="routing-dialog-title">Create smart profile</h2></div><button type="button" data-close-dialog>×</button></header>
+      <input id="routing-id" type="hidden">
+      <div class="routing-form-grid"><label class="field"><span>PROFILE NAME</span><input id="routing-name" required placeholder="Production Autopilot"></label><label class="field"><span>ROUTING SLUG</span><input id="routing-slug" required placeholder="production"></label></div>
+      <section class="router-section"><div class="router-section-head"><div><b>01 / DECISION ENGINE · JEV BY TYPESAFE</b><p>Jev measures prompt difficulty and returns a confidence score for every decision.</p></div></div><label id="jev-key-field" class="field"><span>JEV API KEY <b id="jev-key-status"></b></span><input id="routing-jev-key" type="password" placeholder="Uses JEV_API_KEY when available"><small class="provider-field-note">Encrypted at rest. Leave blank to keep the saved or environment key.</small></label></section>
+      <section class="router-section ladder-section"><div class="router-section-head"><div><b>02 / MODEL LADDER</b><p>Assign a live provider model to each difficulty lane. Nexa tries the best-matched lane first, then moves through real fallbacks if needed.</p></div><button id="add-routing-target" type="button">＋ ADD LANE</button></div><div class="ladder-guide"><span><i>01</i><b>PROVIDER</b><small>Connected route</small></span><span><i>02</i><b>MODEL</b><small>Live catalog</small></span><span><i>03</i><b>LANE</b><small>Prompt difficulty</small></span></div><div id="routing-targets" class="routing-targets"></div></section>
+      <div id="routing-error" class="form-error hidden"></div>
+      <footer><button type="button" class="outline-button" data-close-dialog>Cancel</button><button type="submit" class="primary-action compact"><span>Save profile</span><b>↗</b></button></footer>
     </form>
   </dialog>
 

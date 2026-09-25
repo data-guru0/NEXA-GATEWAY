@@ -2,7 +2,7 @@
 
 Nexa Gateway is a self-hosted LLM gateway written in Go. It gives OpenAI-compatible clients one endpoint for OpenAI, Groq, Gemini, Anthropic, and custom OpenAI-compatible providers while recording every request in a built-in operations dashboard.
 
-The dashboard includes a chat-capability-filtered playground, readable and raw-JSON trace inspection, interactive traffic ranges from five minutes to 30 days (plus custom dates), and separate upstream-provider versus Nexa gateway latency metrics.
+The dashboard includes smart routing profiles, a chat-capability-filtered playground, readable and raw-JSON trace inspection, interactive traffic ranges from five minutes to 30 days (plus custom dates), and separate upstream-provider versus Nexa gateway latency metrics.
 
 ## Run with Docker
 
@@ -55,6 +55,8 @@ With exactly one enabled provider, bare model names also work. You can alternati
 | `NEXA_ADDR` | `:8080` | HTTP listen address |
 | `NEXA_DATA` | `./data` | SQLite database and encryption-key directory |
 | `NEXA_SECURE_COOKIES` | `false` | Require HTTPS for dashboard session cookies |
+| `JEV_API_KEY` | empty | Optional TypeSafe Jev key for Jev-based routing profiles |
+| `TYPESAFE_API_KEY` | empty | Official TypeSafe key name; used when `JEV_API_KEY` is empty |
 
 The provider encryption key is generated at `NEXA_DATA/secret.key`; back it up together with `nexa.db`. Losing it makes saved provider credentials unrecoverable.
 
@@ -74,6 +76,16 @@ This prints the replacement once and immediately invalidates the previous master
 - Dashboard APIs under `/api/*` use an HTTP-only session cookie
 
 OpenAI, Groq, Gemini, and custom compatible routes pass the OpenAI request through. Anthropic messages are translated in both directions; text streaming and standard function tools are supported.
+
+## Smart routing
+
+Create a profile in **Smart Routing**, add model targets from any configured provider, and activate one profile as the default. Applications can then use `smart` as the model name. A specific profile is addressable as `smart/profile-slug` even when it is not the active default.
+
+Prompt difficulty is decided by **Jev by TypeSafe**, which returns a semantic choice and a confidence score through the System One API. Supply `JEV_API_KEY` or enter a key in the profile editor; entered keys are AES-256-GCM encrypted. If no key is configured or Jev is unreachable, the request is routed to the Heavy lane and the reason is recorded in the trace.
+
+Smart routing selects between Light, Medium, and Heavy model lanes from prompt difficulty. Requests retry retryable failures (`408`, `409`, `425`, `429`, and `5xx`) before moving through the real fallback ladder. A route advances to its configured fallback only after a real request failure; Jev confidence and route-health history do not silently move a request to a different difficulty lane.
+
+Smart routes buffer streaming responses until an upstream attempt succeeds so that failover remains possible. Direct `provider/model` routes retain their existing streaming behavior.
 
 ## Security model
 

@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"strings"
 	"time"
 
+	routing "github.com/evolvue/nexa-gateway/internal/router"
 	"github.com/evolvue/nexa-gateway/internal/store"
 	"github.com/google/uuid"
 )
@@ -24,6 +26,7 @@ var datedModelSuffix = regexp.MustCompile(`-(?:\d{4}|\d{4}-\d{2}-\d{2})$`)
 type Gateway struct {
 	Store  *store.Store
 	Client *http.Client
+	Router *routing.Engine
 }
 
 type chatRequest struct {
@@ -39,7 +42,7 @@ type usage struct {
 }
 
 func New(s *store.Store) *Gateway {
-	return &Gateway{Store: s, Client: &http.Client{Timeout: 10 * time.Minute}}
+	return &Gateway{Store: s, Client: &http.Client{Timeout: 10 * time.Minute}, Router: routing.New(s)}
 }
 
 func (g *Gateway) ChatCompletions(w http.ResponseWriter, r *http.Request) {
@@ -52,6 +55,10 @@ func (g *Gateway) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	var cr chatRequest
 	if err := json.Unmarshal(body, &cr); err != nil || cr.Model == "" || len(cr.Messages) == 0 {
 		writeOpenAIError(w, http.StatusBadRequest, "model and messages are required.", "invalid_request_error")
+		return
+	}
+	if cr.Model == "smart" || strings.HasPrefix(cr.Model, "smart/") {
+		g.smartChatCompletions(w, r, body, cr, started)
 		return
 	}
 	providerRef, upstreamModel := splitModel(cr.Model)
@@ -97,6 +104,129 @@ func (g *Gateway) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	trace.CostUSD = estimateCost(upstreamModel, trace.InputTokens, trace.OutputTokens)
 	_ = g.Store.AddTrace(trace)
+}
+
+type routeAttempt struct {
+	TargetID   string  `json:"target_id"`
+	Route      string  `json:"route"`
+	Attempt    int     `json:"attempt"`
+	StatusCode int     `json:"status_code"`
+	LatencyMS  float64 `json:"latency_ms"`
+	Retryable  bool    `json:"retryable"`
+	Error      string  `json:"error,omitempty"`
+}
+
+func (g *Gateway) smartChatCompletions(w http.ResponseWriter, r *http.Request, body []byte, cr chatRequest, started time.Time) {
+	var profile store.RoutingProfile
+	var err error
+	if cr.Model == "smart" {
+		profile, err = g.Store.ActiveRoutingProfile()
+	} else {
+		profile, err = g.Store.RoutingProfile(strings.TrimPrefix(cr.Model, "smart/"))
+	}
+	if err != nil || !profile.Active && cr.Model == "smart" {
+		writeOpenAIError(w, 404, "No active smart routing profile is configured.", "routing_error")
+		return
+	}
+	var payload map[string]any
+	if json.Unmarshal(body, &payload) != nil {
+		writeOpenAIError(w, 400, "Invalid JSON.", "invalid_request_error")
+		return
+	}
+	prompt := routing.PromptFromMessages(cr.Messages)
+	decision, err := g.Router.Decide(r.Context(), profile, prompt, payload)
+	if err != nil {
+		writeOpenAIError(w, 503, err.Error(), "routing_error")
+		return
+	}
+	attempts := []routeAttempt{}
+	var final *httptest.ResponseRecorder
+	var finalTrace store.Trace
+	for _, ranked := range decision.Ranked {
+		for n := 0; n <= profile.MaxRetries; n++ {
+			attemptStarted := time.Now()
+			attemptPayload := clonePayload(payload)
+			attemptPayload["model"] = ranked.Target.Model
+			normalizeCompatiblePayload(ranked.Provider.Type, ranked.Target.Model, attemptPayload)
+			upBody, _ := json.Marshal(attemptPayload)
+			recorder := httptest.NewRecorder()
+			trace := store.Trace{ProviderID: ranked.Provider.ID, ProviderName: ranked.Provider.Name, Model: ranked.Target.Model, Prompt: currentTraceInput(cr.Messages), Status: "error"}
+			ctx, cancel := context.WithTimeout(r.Context(), time.Duration(profile.RequestTimeoutMS)*time.Millisecond)
+			attemptRequest := r.Clone(ctx)
+			if strings.EqualFold(ranked.Provider.Type, "anthropic") {
+				g.forwardAnthropic(recorder, attemptRequest, ranked.Provider, attemptPayload, cr.Stream, &trace)
+			} else {
+				g.forwardCompatible(recorder, attemptRequest, ranked.Provider, upBody, cr.Stream, &trace)
+			}
+			cancel()
+			elapsed := float64(time.Since(attemptStarted)) / float64(time.Millisecond)
+			retryable := isRetryable(trace.StatusCode)
+			attempts = append(attempts, routeAttempt{ranked.Target.ID, ranked.Provider.Slug + "/" + ranked.Target.Model, n + 1, trace.StatusCode, elapsed, retryable, trace.Error})
+			if trace.Status != "success" {
+				g.Store.RecordRoutingFailure(ranked.Provider.ID, ranked.Target.Model, elapsed)
+			}
+			final, finalTrace = recorder, trace
+			if trace.Status == "success" {
+				break
+			}
+			if !retryable {
+				break
+			}
+			if n < profile.MaxRetries {
+				select {
+				case <-time.After(time.Duration(100*(1<<n)) * time.Millisecond):
+				case <-r.Context().Done():
+					break
+				}
+			}
+		}
+		if finalTrace.Status == "success" {
+			break
+		}
+	}
+	if final == nil {
+		writeOpenAIError(w, 503, "No routing target was available.", "routing_error")
+		return
+	}
+	for k, values := range final.Header() {
+		for _, v := range values {
+			w.Header().Add(k, v)
+		}
+	}
+	w.Header().Set("X-Nexa-Routing-Profile", profile.Slug)
+	w.Header().Set("X-Nexa-Routing-Engine", profile.Engine)
+	w.Header().Set("X-Nexa-Routed-Model", finalTrace.Model)
+	w.WriteHeader(final.Code)
+	_, _ = w.Write(final.Body.Bytes())
+	totalMS := float64(time.Since(started)) / float64(time.Millisecond)
+	finalTrace.LatencyMS = int64(totalMS)
+	finalTrace.GatewayMS = totalMS - finalTrace.UpstreamMS
+	if finalTrace.GatewayMS < 0 {
+		finalTrace.GatewayMS = 0
+	}
+	finalTrace.CostUSD = estimateTargetCost(decision.Ranked, finalTrace.ProviderID, finalTrace.Model, finalTrace.InputTokens, finalTrace.OutputTokens)
+	metadata, _ := json.Marshal(map[string]any{"smart_routing": true, "profile_id": profile.ID, "profile_slug": profile.Slug, "engine": profile.Engine, "objective": profile.Objective, "signals": decision.Signals, "confidence_threshold": profile.ConfidenceThreshold, "low_confidence": decision.LowConfidence, "engine_error": decision.EngineError, "attempts": attempts})
+	finalTrace.Metadata = string(metadata)
+	_ = g.Store.AddTrace(finalTrace)
+}
+
+func clonePayload(in map[string]any) map[string]any {
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+func isRetryable(status int) bool {
+	return status == 0 || status == 408 || status == 409 || status == 425 || status == 429 || status >= 500
+}
+func estimateTargetCost(ranked []routing.RankedTarget, providerID, model string, in, out int) float64 {
+	for _, r := range ranked {
+		if r.Target.ProviderID == providerID && r.Target.Model == model {
+			return (float64(in)*r.Target.InputCostPerMillion + float64(out)*r.Target.OutputCostPerMillion) / 1_000_000
+		}
+	}
+	return estimateCost(model, in, out)
 }
 
 // currentTraceInput keeps a trace focused on the user turn that caused the
@@ -485,7 +615,7 @@ func isChatModel(providerType, id string) bool {
 	if id == "" {
 		return false
 	}
-	for _, excluded := range []string{"embedding", "embed-", "babbage", "davinci", "whisper", "tts", "audio", "moderation", "dall-e", "image", "realtime", "transcri", "omni-moderation", "search-preview", "computer-use"} {
+	for _, excluded := range []string{"embedding", "embed-", "babbage", "davinci", "whisper", "tts", "audio", "moderation", "dall-e", "image", "realtime", "transcri", "omni-moderation", "search-preview", "computer-use", "prompt-guard", "safeguard"} {
 		if strings.Contains(id, excluded) {
 			return false
 		}

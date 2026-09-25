@@ -51,6 +51,12 @@ func New(s *store.Store, log *slog.Logger, secureCookies bool) http.Handler {
 			r.Put("/providers/{id}", x.updateProvider)
 			r.Delete("/providers/{id}", x.deleteProvider)
 			r.Get("/providers/{id}/models", x.models)
+			r.Get("/routing/profiles", x.routingProfiles)
+			r.Post("/routing/profiles", x.createRoutingProfile)
+			r.Put("/routing/profiles/{id}", x.updateRoutingProfile)
+			r.Delete("/routing/profiles/{id}", x.deleteRoutingProfile)
+			r.Post("/routing/profiles/{id}/activate", x.activateRoutingProfile)
+			r.Post("/routing/evaluate", x.evaluateRouting)
 			r.Get("/traces", x.traces)
 			r.Get("/traces/{id}", x.trace)
 			r.Get("/users", x.users)
@@ -367,6 +373,14 @@ func (s *Server) allModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := []map[string]any{}
+	if active, e := s.Store.ActiveRoutingProfile(); e == nil {
+		data = append(data, map[string]any{"id": "smart", "object": "model", "owned_by": "Nexa Smart Routing", "profile": active.Slug})
+	}
+	if profiles, e := s.Store.RoutingProfiles(); e == nil {
+		for _, p := range profiles {
+			data = append(data, map[string]any{"id": "smart/" + p.Slug, "object": "model", "owned_by": "Nexa Smart Routing", "profile": p.Slug})
+		}
+	}
 	failed := 0
 	for _, p := range providers {
 		if !p.Enabled {
@@ -395,6 +409,97 @@ func (s *Server) allModels(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Nexa-Provider-Errors", strconv.Itoa(failed))
 	}
 	writeJSON(w, 200, map[string]any{"object": "list", "data": data})
+}
+
+func (s *Server) routingProfiles(w http.ResponseWriter, r *http.Request) {
+	v, e := s.Store.RoutingProfiles()
+	if e != nil {
+		writeError(w, 500, e.Error())
+		return
+	}
+	writeJSON(w, 200, v)
+}
+func (s *Server) createRoutingProfile(w http.ResponseWriter, r *http.Request) {
+	var p store.RoutingProfile
+	if !decode(w, r, &p) {
+		return
+	}
+	v, e := s.Store.CreateRoutingProfile(p)
+	if e != nil {
+		writeError(w, 400, store.ErrMessage(e))
+		return
+	}
+	writeJSON(w, 201, v)
+}
+func (s *Server) updateRoutingProfile(w http.ResponseWriter, r *http.Request) {
+	var p store.RoutingProfile
+	if !decode(w, r, &p) {
+		return
+	}
+	p.ID = chi.URLParam(r, "id")
+	v, e := s.Store.UpdateRoutingProfile(p)
+	if e != nil {
+		writeError(w, 400, store.ErrMessage(e))
+		return
+	}
+	v.JevAPIKey = ""
+	writeJSON(w, 200, v)
+}
+func (s *Server) deleteRoutingProfile(w http.ResponseWriter, r *http.Request) {
+	if e := s.Store.DeleteRoutingProfile(chi.URLParam(r, "id")); e != nil {
+		writeError(w, 500, e.Error())
+		return
+	}
+	w.WriteHeader(204)
+}
+func (s *Server) activateRoutingProfile(w http.ResponseWriter, r *http.Request) {
+	if e := s.Store.ActivateRoutingProfile(chi.URLParam(r, "id")); e != nil {
+		writeError(w, 404, "Routing profile not found.")
+		return
+	}
+	v, _ := s.Store.RoutingProfile(chi.URLParam(r, "id"))
+	v.JevAPIKey = ""
+	writeJSON(w, 200, v)
+}
+func (s *Server) evaluateRouting(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		ProfileID       string   `json:"profile_id"`
+		Prompt          string   `json:"prompt"`
+		MaxOutputTokens int      `json:"max_output_tokens"`
+		Capabilities    []string `json:"capabilities"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	p, e := s.Store.RoutingProfile(in.ProfileID)
+	if e != nil {
+		writeError(w, 404, "Routing profile not found.")
+		return
+	}
+	payload := map[string]any{"max_completion_tokens": in.MaxOutputTokens}
+	if slicesContains(in.Capabilities, "tools") {
+		payload["tools"] = []any{map[string]any{}}
+	}
+	if slicesContains(in.Capabilities, "json") {
+		payload["response_format"] = map[string]any{"type": "json_object"}
+	}
+	d, e := s.Gateway.Router.Decide(r.Context(), p, in.Prompt, payload)
+	if e != nil {
+		writeError(w, 400, e.Error())
+		return
+	}
+	for i := range d.Ranked {
+		d.Ranked[i].Provider = store.Provider{}
+	}
+	writeJSON(w, 200, d)
+}
+func slicesContains(v []string, x string) bool {
+	for _, s := range v {
+		if s == x {
+			return true
+		}
+	}
+	return false
 }
 func (s *Server) traces(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
