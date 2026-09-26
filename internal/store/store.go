@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -40,6 +41,8 @@ type Store struct {
 	apiKeys   map[string]APIKey // keyed by SHA-256 of the key
 	masterSHA []byte
 	keyUsed   map[string]time.Time
+
+	feedbackVersion atomic.Int64
 }
 
 type Provider struct {
@@ -338,6 +341,9 @@ CREATE INDEX IF NOT EXISTS idx_routing_attempt_health ON routing_attempts(provid
 	}
 	// The bundled local classifier was removed; existing profiles move to Jev.
 	if _, err = s.DB.Exec("UPDATE routing_profiles SET engine='jev' WHERE engine!='jev'"); err != nil {
+		return err
+	}
+	if err = s.migrateFeedback(); err != nil {
 		return err
 	}
 	_, err = s.DB.Exec("DELETE FROM routing_attempts WHERE created_at<? OR provider_id NOT IN (SELECT id FROM providers)", time.Now().UTC().Add(-24*time.Hour))
@@ -698,6 +704,7 @@ func (s *Store) DeleteProvider(id string) error {
 			}
 		}
 	}
+	using = append(using, s.feedbackLoopsUsing(id)...)
 	if len(using) > 0 {
 		return fmt.Errorf("%w: remove it from %s first", ErrProviderInUse, strings.Join(using, ", "))
 	}
