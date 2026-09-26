@@ -2,7 +2,7 @@
 
 **A self-hosted control room for LLM providers.** Nexa Gateway runs as one Go service with a built-in dashboard. Add a provider, choose a model in the Playground, send a prompt, and inspect the resulting trace. This guide covers that complete workflow on your own computer.
 
-> This getting-started guide uses the dashboard **Playground**. Nexa also exposes an OpenAI-compatible API and includes smart routing and feedback loops; those workflows are outside this guide.
+> This getting-started guide uses the dashboard **Playground**. Nexa also exposes an OpenAI-compatible API and includes smart routing, feedback loops, response caching and per-key limits; they are summarised under [More features](#more-features).
 
 ## What it does
 
@@ -11,7 +11,7 @@ Your browser → Nexa Playground → Nexa gateway → LLM provider
                                  ↘ request trace in local storage
 ```
 
-The Playground sends real requests through the gateway. Nexa uses the selected provider's credential, returns the model's answer, and records the prompt, response, status, tokens, latency, and estimated cost in **Traces**. The dashboard, Go server, SQLite database, and encryption key run locally; the selected provider receives your prompt when you press **Send**.
+The Playground sends real requests through the gateway. Nexa uses the selected provider's credential, returns the model's answer, and records the prompt, response, status, tokens, latency, and estimated cost in **Traces**. The dashboard, Go server, PostgreSQL database, Redis cache, and encryption key run locally; the selected provider receives your prompt when you press **Send**.
 
 | Part | Role |
 | --- | --- |
@@ -40,7 +40,7 @@ cd LLM-GATEWAY
 docker compose up --build -d
 ```
 
-Compose builds the image, starts the `nexa-gateway` service, maps port **8080**, and creates a persistent Docker volume named `nexa-data`. There is no separate database to install.
+Compose builds the image and starts three services: `nexa-gateway` on port **8080**, **PostgreSQL** (configuration, traces and ratings) and **Redis Stack** (response cache, rate limits and change notifications). Both stores run inside Docker with their own volumes; there is nothing else to install.
 
 Check its status with `docker compose ps`, then open **<http://localhost:8080>**. If the page does not load immediately, inspect `docker compose logs nexa-gateway`.
 
@@ -155,7 +155,7 @@ You can also click **Open trace** above a completed Playground answer. Traces ar
 | Start it again | `docker compose up -d` |
 | Rebuild after pulling changes | `git pull && docker compose up --build -d` |
 
-`docker compose down` removes the container but **keeps** the `nexa-data` volume. That volume contains the SQLite database and `secret.key`, which encrypts saved provider credentials. Keep those files together when backing up or moving an instance. Deleting the volume removes configuration and traces; a new volume creates a new master key.
+`docker compose down` removes the containers but **keeps** the volumes: `nexa-postgres` (configuration and traces), `nexa-redis` (cache and counters) and `nexa-data` (`secret.key`, which encrypts saved provider credentials). Back up `nexa-postgres` together with `secret.key`, or set `NEXA_ENCRYPTION_KEY` (32 bytes, base64) instead of using the file. Deleting the volumes removes configuration and traces; a new database creates a new master key.
 
 ### If you lose the master key
 
@@ -170,6 +170,16 @@ docker compose up -d
 ```
 
 The reset command prints the replacement once. It invalidates the old master key and signs out other master sessions; it does not remove providers or traces.
+
+## More features
+
+| Feature | Where | What it does |
+| --- | --- | --- |
+| **API key limits** | **Access → API keys →** sliders icon | Per application key: monthly budget (USD), requests per minute, tokens per minute, and allowed models (`openai/*`, `smart`, …). Over a limit the key gets `429`; a model outside its list gets `403`. |
+| **Response cache** | **Cache** | Exact cache for identical requests and semantic cache for reworded ones (using an embedding model you pick). Hits cost nothing and are marked `CACHE` in Traces. Send `X-Nexa-Cache: off` to skip it. |
+| **More endpoints** | API | `/v1/embeddings`, `/v1/responses`, `/v1/moderations`, `/v1/images/generations`, `/v1/audio/speech`, `/v1/audio/transcriptions` and more, using `provider/model` like chat. |
+| **Trace export** | **Traces → Export** | Download the filtered traces as CSV or JSON Lines. |
+| **Automatic winner** | **Feedback Loops** | When one model is clearly best, send all traffic to it, by hand or automatically. **Reopen learning** starts the split again. |
 
 ## Troubleshooting
 
@@ -187,7 +197,8 @@ The reset command prints the replacement once. It invalidates the old master key
 
 - The master key is shown only when created or rotated. Provider API keys and extra headers are encrypted at rest; dashboard sessions use HTTP-only cookies.
 - Keep the dashboard on a trusted machine or network. For an internet-facing deployment, put HTTPS in front of Nexa and add `NEXA_SECURE_COOKIES: "true"` to the service's `environment` in `docker-compose.yml`.
-- Compose persists data in `nexa-data`. The container stores it at `/data`; a native run defaults to `./data`.
+- Compose persists data in the `nexa-postgres`, `nexa-redis` and `nexa-data` volumes. PostgreSQL and Redis are not published outside Docker; set `POSTGRES_PASSWORD` before the first start to choose the database password.
+- To run several gateway instances behind a load balancer, point them at the same `NEXA_DATABASE_URL` and `NEXA_REDIS_URL` and give them the same `NEXA_ENCRYPTION_KEY`; limits, the cache, revoked keys and every setting are shared.
 - Traces may contain prompts and responses. Give dashboard access only to people who should see that content.
 
 Application code, Docker configuration, and the embedded dashboard live in this directory. The sibling `TESTING/` directory contains black-box verification tooling.
