@@ -18,7 +18,7 @@ type FeedbackLoop struct {
 	Name             string             `json:"name"`
 	Slug             string             `json:"slug"`
 	Mode             string             `json:"mode"`   // human | jev
-	Status           string             `json:"status"` // running | paused
+	Status           string             `json:"status"` // running | paused | concluded
 	MinShare         float64            `json:"min_share"`
 	Window           int                `json:"window"`
 	JevSample        float64            `json:"jev_sample"`
@@ -26,8 +26,16 @@ type FeedbackLoop struct {
 	JevKeyConfigured bool               `json:"jev_key_configured"`
 	Arms             []FeedbackArm      `json:"arms"`
 	FrozenShares     map[string]float64 `json:"frozen_shares,omitempty"`
-	CreatedAt        time.Time          `json:"created_at"`
-	UpdatedAt        time.Time          `json:"updated_at"`
+	// Concluding: once the leader is at least ConcludeConfidence likely best after
+	// ConcludeMinVotes counted ratings, AutoConclude sends all traffic to it.
+	AutoConclude       bool       `json:"auto_conclude"`
+	ConcludeConfidence float64    `json:"conclude_confidence"`
+	ConcludeMinVotes   int        `json:"conclude_min_votes"`
+	WinnerArmID        string     `json:"winner_arm_id,omitempty"`
+	ConcludedAt        *time.Time `json:"concluded_at,omitempty"`
+	ConcludedBy        string     `json:"concluded_by,omitempty"` // auto | manual
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
 }
 
 type FeedbackArm struct {
@@ -63,24 +71,9 @@ type ArmTraffic struct {
 	Cost         float64
 }
 
-func (s *Store) migrateFeedback() error {
-	_, err := s.DB.Exec(`
-CREATE TABLE IF NOT EXISTS feedback_loops (
- id TEXT PRIMARY KEY, slug TEXT NOT NULL UNIQUE COLLATE NOCASE, config_json TEXT NOT NULL,
- jev_api_key TEXT NOT NULL DEFAULT '', created_at DATETIME NOT NULL, updated_at DATETIME NOT NULL
-);
-CREATE TABLE IF NOT EXISTS feedback_votes (
- trace_id TEXT PRIMARY KEY, loop_id TEXT NOT NULL, arm_id TEXT NOT NULL, source TEXT NOT NULL,
- verdict TEXT NOT NULL, up REAL NOT NULL, down REAL NOT NULL, confidence REAL NOT NULL, created_at DATETIME NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_feedback_votes_arm ON feedback_votes(loop_id,arm_id,created_at DESC);
-`)
-	return err
-}
-
 // FeedbackVersion changes whenever votes or loops change, so callers can cache derived splits.
 func (s *Store) FeedbackVersion() int64 { return s.feedbackVersion.Load() }
-func (s *Store) bumpFeedback()          { s.feedbackVersion.Add(1) }
+func (s *Store) bumpFeedback()          { s.Publish("feedback") } // every instance recomputes splits
 
 func normalizeFeedbackLoop(l *FeedbackLoop) error {
 	l.Name = strings.TrimSpace(l.Name)
@@ -94,9 +87,19 @@ func normalizeFeedbackLoop(l *FeedbackLoop) error {
 	if l.Mode != "human" && l.Mode != "jev" {
 		return errors.New("mode must be human or jev")
 	}
-	if l.Status != "paused" {
+	if l.Status != "paused" && l.Status != "concluded" {
 		l.Status = "running"
 	}
+	if l.ConcludeConfidence == 0 {
+		l.ConcludeConfidence = 0.95
+	}
+	if l.ConcludeConfidence < 0.8 || l.ConcludeConfidence > 0.999 {
+		return errors.New("confidence to conclude must be between 80% and 99.9%")
+	}
+	if l.ConcludeMinVotes == 0 {
+		l.ConcludeMinVotes = 30
+	}
+	l.ConcludeMinVotes = min(max(l.ConcludeMinVotes, 10), 10000)
 	if len(l.Arms) < 2 || len(l.Arms) > 4 {
 		return errors.New("a feedback loop needs 2 to 4 models")
 	}
@@ -197,6 +200,17 @@ func (s *Store) UpdateFeedbackLoop(l FeedbackLoop) (FeedbackLoop, error) {
 	if l.Status == "paused" {
 		l.FrozenShares = current.FrozenShares
 	}
+	l.WinnerArmID, l.ConcludedAt, l.ConcludedBy = "", nil, ""
+	if l.Status == "concluded" {
+		for _, a := range l.Arms {
+			if a.ID == current.WinnerArmID {
+				l.WinnerArmID, l.ConcludedAt, l.ConcludedBy = current.WinnerArmID, current.ConcludedAt, current.ConcludedBy
+			}
+		}
+		if l.WinnerArmID == "" { // the winning model was removed: learn again
+			l.Status = "running"
+		}
+	}
 	if err = s.saveFeedbackLoop(l, false); err != nil {
 		return l, err
 	}
@@ -222,7 +236,37 @@ func (s *Store) SetFeedbackStatus(id, status string, frozen map[string]float64) 
 	if status != "paused" {
 		l.Status, l.FrozenShares = "running", nil
 	}
-	l.JevAPIKey = "" // keep the stored encrypted key untouched
+	l.WinnerArmID, l.ConcludedAt, l.ConcludedBy = "", nil, "" // pausing or resuming reopens a concluded loop
+	l.JevAPIKey = ""                                          // keep the stored encrypted key untouched
+	if err = s.saveFeedbackLoop(l, false); err != nil {
+		return l, err
+	}
+	return s.FeedbackLoop(id)
+}
+
+// CountedVotes is how many ratings of the loop count (unsure Jev verdicts do not).
+func (s *Store) CountedVotes(loopID string) int {
+	n := 0
+	_ = s.DB.QueryRow("SELECT COUNT(*) FROM feedback_votes WHERE loop_id=? AND verdict!='uncertain'", loopID).Scan(&n)
+	return n
+}
+
+// ConcludeFeedbackLoop sends all traffic to one model. by is "auto" or "manual".
+func (s *Store) ConcludeFeedbackLoop(id, armID, by string) (FeedbackLoop, error) {
+	l, err := s.FeedbackLoop(id)
+	if err != nil {
+		return l, err
+	}
+	found := false
+	for _, a := range l.Arms {
+		found = found || a.ID == armID
+	}
+	if !found {
+		return l, errors.New("the winner must be one of the loop's models")
+	}
+	now := time.Now().UTC()
+	l.Status, l.FrozenShares, l.WinnerArmID, l.ConcludedAt, l.ConcludedBy, l.UpdatedAt = "concluded", nil, armID, &now, by, now
+	l.JevAPIKey = ""
 	if err = s.saveFeedbackLoop(l, false); err != nil {
 		return l, err
 	}
@@ -235,6 +279,12 @@ func (s *Store) scanFeedbackLoop(config, enc string, created, updated time.Time,
 		return l, err
 	}
 	l.ID, l.CreatedAt, l.UpdatedAt = id, created, updated
+	if l.ConcludeConfidence == 0 { // loops saved before concluding existed
+		l.ConcludeConfidence = 0.95
+	}
+	if l.ConcludeMinVotes == 0 {
+		l.ConcludeMinVotes = 30
+	}
 	if enc != "" {
 		key, err := s.decrypt(enc)
 		if err != nil {
@@ -363,7 +413,7 @@ func (s *Store) ArmCounts(l FeedbackLoop) map[string]ArmCount {
 	out := map[string]ArmCount{}
 	for _, a := range l.Arms {
 		var c ArmCount
-		_ = s.DB.QueryRow(`SELECT COALESCE(SUM(up),0),COALESCE(SUM(down),0) FROM (SELECT up,down FROM feedback_votes WHERE loop_id=? AND arm_id=? AND verdict!='uncertain' ORDER BY created_at DESC LIMIT ?)`, l.ID, a.ID, l.Window).Scan(&c.Up, &c.Down)
+		_ = s.DB.QueryRow(`SELECT COALESCE(SUM(up),0),COALESCE(SUM(down),0) FROM (SELECT up,down FROM feedback_votes WHERE loop_id=? AND arm_id=? AND verdict!='uncertain' ORDER BY created_at DESC LIMIT ?) AS recent`, l.ID, a.ID, l.Window).Scan(&c.Up, &c.Down)
 		out[a.ID] = c
 	}
 	return out
@@ -426,7 +476,7 @@ func promptText(prompt string) string {
 
 // ArmTraffic aggregates traced requests per model for a loop (all time).
 func (s *Store) LoopTraffic(loopID string) (map[string]*ArmTraffic, error) {
-	rows, err := s.DB.Query(`SELECT status,latency_ms,cost_usd,metadata FROM traces WHERE metadata LIKE ?`, `%"loop_id":"`+loopID+`"%`)
+	rows, err := s.DB.Query(`SELECT status,latency_ms,cost_usd,metadata::text FROM traces WHERE metadata->>'loop_id'=?`, loopID)
 	if err != nil {
 		return nil, err
 	}

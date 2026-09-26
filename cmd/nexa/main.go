@@ -21,7 +21,9 @@ var version = "dev"
 
 func main() {
 	addr := flag.String("addr", env("NEXA_ADDR", ":8080"), "HTTP listen address")
-	data := flag.String("data", env("NEXA_DATA", "./data"), "persistent data directory")
+	data := flag.String("data", env("NEXA_DATA", "./data"), "directory for secret.key (unless NEXA_ENCRYPTION_KEY is set)")
+	databaseURL := flag.String("database-url", env("NEXA_DATABASE_URL", ""), "PostgreSQL connection URL")
+	redisURL := flag.String("redis-url", env("NEXA_REDIS_URL", ""), "Redis Stack connection URL")
 	healthcheck := flag.Bool("healthcheck", false, "check the running gateway and exit")
 	resetMaster := flag.Bool("reset-master", false, "rotate the master key and exit")
 	flag.Parse()
@@ -35,7 +37,8 @@ func main() {
 		return
 	}
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	db, master, err := store.Open(*data)
+	slog.SetDefault(log) // every package logs structured JSON
+	db, master, err := store.Open(*data, *databaseURL, *redisURL)
 	if err != nil {
 		log.Error("startup failed", "error", err)
 		os.Exit(1)

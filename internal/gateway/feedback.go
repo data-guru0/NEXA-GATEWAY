@@ -152,11 +152,51 @@ func (g *Gateway) LoopSplit(l store.FeedbackLoop) Split {
 			}
 		}
 	}
+	if l.Status == "concluded" && l.WinnerArmID != "" { // the winner takes all traffic; others stay as fallbacks
+		shares = make(map[string]float64, len(ids))
+		for _, id := range ids {
+			shares[id] = 0
+		}
+		shares[l.WinnerArmID] = 1
+	}
 	split := Split{Shares: shares, Learned: learned, ProbBest: probBest, Interval: interval, Counts: counts}
 	splitMu.Lock()
 	splitCache[l.ID] = splitCacheEntry{version, split}
 	splitMu.Unlock()
 	return split
+}
+
+// Leader is the model most likely to be best, and whether the loop may conclude:
+// its chance of being best reaches the loop's confidence after enough ratings.
+type Leader struct {
+	ArmID      string  `json:"arm_id"`
+	ProbBest   float64 `json:"prob_best"`
+	Counted    int     `json:"counted_votes"`
+	Conclusive bool    `json:"conclusive"`
+}
+
+func (g *Gateway) LoopLeader(l store.FeedbackLoop, split Split) Leader {
+	lead := Leader{ProbBest: -1, Counted: g.Store.CountedVotes(l.ID)}
+	for _, a := range l.Arms {
+		if p := split.ProbBest[a.ID]; p > lead.ProbBest {
+			lead.ArmID, lead.ProbBest = a.ID, p
+		}
+	}
+	lead.Conclusive = lead.Counted >= l.ConcludeMinVotes && lead.ProbBest >= l.ConcludeConfidence
+	return lead
+}
+
+// AfterVote concludes a loop with auto-conclude on once its leader is clear.
+func (g *Gateway) AfterVote(loopID string) {
+	l, err := g.Store.FeedbackLoop(loopID)
+	if err != nil || !l.AutoConclude || l.Status != "running" {
+		return
+	}
+	if lead := g.LoopLeader(l, g.LoopSplit(l)); lead.Conclusive {
+		if _, err := g.Store.ConcludeFeedbackLoop(l.ID, lead.ArmID, "auto"); err == nil {
+			slog.Info("feedback loop concluded", "loop", l.Slug, "winner", lead.ArmID, "prob_best", lead.ProbBest, "ratings", lead.Counted)
+		}
+	}
 }
 
 // SplitHistory replays the loop's votes and returns the learned split at up to
@@ -268,29 +308,17 @@ func (g *Gateway) feedbackLoop(w http.ResponseWriter, r *http.Request, payload m
 	if chosen != nil {
 		armID = chosen.ID
 	}
-	meta, _ := json.Marshal(map[string]any{"feedback_loop": true, "loop_id": loop.ID, "loop_slug": loop.Slug, "mode": loop.Mode, "sampled_arm": sampled, "arm_id": armID, "served": chosen != nil, "shares": split.Shares, "attempts": attempts})
+	meta, _ := json.Marshal(map[string]any{"feedback_loop": true, "loop_id": loop.ID, "loop_slug": loop.Slug, "mode": loop.Mode, "sampled_arm": sampled, "arm_id": armID, "served": chosen != nil, "shares": split.Shares, "attempts": attempts, "concluded": loop.Status == "concluded"})
 	t.Metadata = string(meta)
 	if chosen == nil || t.Status != "success" || loop.Mode != "jev" || loop.Status != "running" || rand.Float64() >= loop.JevSample {
 		return
 	}
-	traceID, response, key := t.ID, t.Response, routing.JevKey(loop.JevAPIKey)
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
-		defer cancel()
-		verdict, confidence, err := g.Router.Judge(ctx, key, rawMessages, response)
-		if err != nil { // no vote is better than a guessed one; traffic keeps flowing
-			slog.Warn("jev could not rate a feedback-loop answer", "loop", loop.Slug, "trace_id", traceID, "error", err.Error())
-			return
-		}
-		vote := store.FeedbackVote{TraceID: traceID, LoopID: loop.ID, ArmID: armID, Source: "jev", Verdict: verdict, Confidence: confidence}
-		switch {
-		case confidence < jevMinimumTrust:
-			vote.Verdict = "uncertain"
-		case verdict == "liked":
-			vote.Up = confidence
-		default:
-			vote.Down = confidence
-		}
-		_ = g.Store.SaveVote(vote)
-	}()
+	// Hand the answer to the durable judging queue; a worker on any instance rates it.
+	job := store.JudgeJob{TraceID: t.ID, LoopID: loop.ID, ArmID: armID, Input: routing.JevInput(rawMessages), Response: t.Response}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := g.Store.EnqueueJudge(ctx, job); err != nil {
+		slog.Warn("judging queue unavailable; rating in-process", "trace_id", t.ID, "error", err.Error())
+		go g.runJudgeJob(context.Background(), store.QueuedJudgeJob{Job: job}) // no id: nothing to acknowledge
+	}
 }

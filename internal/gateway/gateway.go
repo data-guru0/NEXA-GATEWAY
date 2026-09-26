@@ -33,6 +33,8 @@ type Gateway struct {
 
 	modelsMu sync.Mutex
 	models   map[string]modelCache
+
+	cache cacheState
 }
 
 type modelCache struct {
@@ -48,7 +50,9 @@ func New(s *store.Store) *Gateway {
 	// Non-streaming completions only send headers once generation finishes, so the
 	// header timeout is generous; streams are then unbounded (no Client.Timeout).
 	t.ResponseHeaderTimeout = 10 * time.Minute
-	return &Gateway{Store: s, Client: &http.Client{Transport: t}, Router: routing.New(s), models: map[string]modelCache{}}
+	g := &Gateway{Store: s, Client: &http.Client{Transport: t}, Router: routing.New(s), models: map[string]modelCache{}}
+	s.OnEvent("cache-settings", func() { g.cache.mu.Lock(); g.cache.settings = nil; g.cache.mu.Unlock() })
+	return g
 }
 
 // CallInfo travels in the request context from the server middleware.
@@ -56,6 +60,8 @@ type CallInfo struct {
 	Start   time.Time
 	Source  string
 	KeyName string
+	KeyID   string          // set for application API keys, which carry limits
+	Limits  store.KeyLimits // limits of that key
 }
 
 type ctxKey struct{}
@@ -75,6 +81,13 @@ func Annotate(r *http.Request, source, keyName string) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), ctxKey{}, info))
 }
 
+// AnnotateKey records an application API key and its limits.
+func AnnotateKey(r *http.Request, k store.APIKey) *http.Request {
+	info := callInfo(r)
+	info.Source, info.KeyName, info.KeyID, info.Limits = "api", k.Name, k.ID, k.Limits
+	return r.WithContext(context.WithValue(r.Context(), ctxKey{}, info))
+}
+
 func callInfo(r *http.Request) CallInfo {
 	info, _ := r.Context().Value(ctxKey{}).(CallInfo)
 	if info.Start.IsZero() {
@@ -87,7 +100,7 @@ func msSince(t time.Time) float64 { return float64(time.Since(t)) / float64(time
 
 func (g *Gateway) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	info := callInfo(r)
-	t := &store.Trace{ID: uuid.NewString(), RequestID: middleware.GetReqID(r.Context()), Source: info.Source, APIKeyName: info.KeyName, ProviderName: "—", Status: "error"}
+	t := &store.Trace{ID: uuid.NewString(), RequestID: middleware.GetReqID(r.Context()), Source: info.Source, APIKeyName: info.KeyName, APIKeyID: info.KeyID, ProviderName: "—", Status: "error"}
 	w.Header().Set("X-Nexa-Trace-Id", t.ID)
 	defer g.finish(t, info.Start)
 	fail := func(status int, msg, typ string) {
@@ -112,21 +125,28 @@ func (g *Gateway) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	rawMessages, _ := json.Marshal(messages)
 	t.Prompt = currentTraceInput(rawMessages)
 	t.Params = traceParams(payload)
-	if model == "smart" || strings.HasPrefix(model, "smart/") {
+	if !g.admit(w, r, info, t, model) {
+		return
+	}
+	served, pending := g.cacheLookup(w, r, payload, messages, model, t, info.Start)
+	if served {
+		return
+	}
+	switch {
+	case model == "smart" || strings.HasPrefix(model, "smart/"):
 		g.smart(w, r, payload, rawMessages, t, info.Start)
-		return
-	}
-	if strings.HasPrefix(model, "feedback/") {
+	case strings.HasPrefix(model, "feedback/"):
 		g.feedbackLoop(w, r, payload, rawMessages, t, info.Start)
-		return
+	default:
+		p, upstreamModel, err := g.resolve(model, strings.TrimSpace(r.Header.Get("X-Nexa-Provider")))
+		if err != nil {
+			fail(404, err.Error(), "invalid_request_error")
+			return
+		}
+		t.ProviderID, t.ProviderName, t.Model = p.ID, p.Name, upstreamModel
+		g.forward(w, r.Context(), r.Header, attempt{provider: p, model: upstreamModel, payload: payload, stream: t.Stream, retries: 1, start: info.Start}, t)
 	}
-	p, upstreamModel, err := g.resolve(model, strings.TrimSpace(r.Header.Get("X-Nexa-Provider")))
-	if err != nil {
-		fail(404, err.Error(), "invalid_request_error")
-		return
-	}
-	t.ProviderID, t.ProviderName, t.Model = p.ID, p.Name, upstreamModel
-	g.forward(w, r.Context(), r.Header, attempt{provider: p, model: upstreamModel, payload: payload, stream: t.Stream, retries: 1, start: info.Start}, t)
+	g.cacheSave(pending, t)
 }
 
 func (g *Gateway) finish(t *store.Trace, start time.Time) {
@@ -136,7 +156,9 @@ func (g *Gateway) finish(t *store.Trace, start time.Time) {
 	if t.CostUSD == 0 {
 		t.CostUSD = g.estimateCost(t.Model, t.InputTokens, t.OutputTokens)
 	}
+	t.CostUSD += t.ExtraCostUSD
 	_ = g.Store.AddTrace(*t)
+	g.recordUsage(t)
 }
 
 // resolve maps a model string to a provider. The leading segment is a provider
@@ -1504,6 +1526,7 @@ var builtinPrices = map[string][2]float64{
 	"claude-3-haiku": {0.25, 1.25}, "claude-3-5-haiku": {0.80, 4}, "claude-3-5-sonnet": {3, 15}, "claude-3-7-sonnet": {3, 15}, "claude-3-opus": {15, 75},
 	"claude-sonnet-4": {3, 15}, "claude-sonnet-4-5": {3, 15}, "claude-opus-4": {15, 75}, "claude-opus-4-1": {15, 75}, "claude-haiku-4-5": {1, 5},
 	"gemini-2.0-flash": {0.10, 0.40}, "gemini-2.0-flash-lite": {0.075, 0.30}, "gemini-2.5-flash": {0.30, 2.50}, "gemini-2.5-flash-lite": {0.10, 0.40}, "gemini-2.5-pro": {1.25, 10},
+	"text-embedding-3-small": {0.02, 0}, "text-embedding-3-large": {0.13, 0}, "text-embedding-ada-002": {0.10, 0}, "gemini-embedding-001": {0.15, 0},
 	"llama-3.3-70b-versatile": {0.59, 0.79}, "llama-3.1-8b-instant": {0.05, 0.08}, "openai/gpt-oss-120b": {0.15, 0.75}, "openai/gpt-oss-20b": {0.075, 0.30},
 }
 

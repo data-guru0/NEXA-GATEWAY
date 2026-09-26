@@ -28,7 +28,6 @@ type Server struct {
 	Gateway       *gateway.Gateway
 	Log           *slog.Logger
 	SecureCookies bool
-	logins        *limiter
 	checksMu      sync.Mutex
 	checks        map[string]providerCheck
 }
@@ -48,14 +47,18 @@ type providerCheck struct {
 }
 
 func New(s *store.Store, log *slog.Logger, secureCookies bool) http.Handler {
-	x := &Server{Store: s, Gateway: gateway.New(s), Log: log, SecureCookies: secureCookies, logins: &limiter{hits: map[string]*window{}}, checks: map[string]providerCheck{}}
+	x := &Server{Store: s, Gateway: gateway.New(s), Log: log, SecureCookies: secureCookies, checks: map[string]providerCheck{}}
 	go x.healthLoop()
+	x.Gateway.StartJudging(context.Background())
 	r := chi.NewRouter()
 	r.Use(middleware.RealIP, middleware.RequestID, middleware.Recoverer, x.securityHeaders, x.accessLog, gateway.StartClock)
 	r.Get("/healthz", x.health)
 	r.With(x.gatewayAuth).Post("/v1/chat/completions", x.Gateway.ChatCompletions)
 	r.With(x.gatewayAuth).Get("/v1/models", x.allModels)
 	r.With(x.gatewayAuth).Post("/v1/feedback", x.vote)
+	for _, path := range []string{"/embeddings", "/responses", "/moderations", "/images/generations", "/images/edits", "/audio/speech", "/audio/transcriptions", "/audio/translations"} {
+		r.With(x.gatewayAuth).Post("/v1"+path, x.Gateway.Endpoint(path))
+	}
 	r.Route("/api", func(r chi.Router) {
 		r.Post("/auth/login", x.login)
 		r.Post("/auth/logout", x.logout)
@@ -70,6 +73,8 @@ func New(s *store.Store, log *slog.Logger, secureCookies bool) http.Handler {
 			r.Get("/routing/profiles", x.routingProfiles)
 			r.Post("/routing/evaluate", x.evaluateRouting)
 			r.Get("/traces", x.traces)
+			r.Get("/traces/export", x.exportTraces)
+			r.Get("/cache", x.cacheInfo)
 			r.Get("/traces/{id}", x.trace)
 			r.Get("/users", x.users)
 			r.Get("/prices", x.prices)
@@ -95,6 +100,11 @@ func New(s *store.Store, log *slog.Logger, secureCookies bool) http.Handler {
 				r.Delete("/prices", x.deletePrice)
 				r.Post("/api-keys", x.createAPIKey)
 				r.Delete("/api-keys/{id}", x.deleteAPIKey)
+				r.Put("/api-keys/{id}/limits", x.setKeyLimits)
+				r.Put("/cache", x.setCache)
+				r.Delete("/cache", x.clearCache)
+				r.Post("/feedback/loops/{id}/conclude", x.concludeFeedbackLoop)
+				r.Post("/feedback/loops/{id}/judging/retry", x.retryJudging)
 				r.Post("/master-key/rotate", x.rotateMaster)
 				r.Post("/feedback/loops", x.createFeedbackLoop)
 				r.Put("/feedback/loops/{id}", x.updateFeedbackLoop)
@@ -159,8 +169,8 @@ func (s *Server) gatewayAuth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, gateway.Annotate(r, "api", "master key"))
 			return
 		}
-		if name, ok := s.Store.ValidateAPIKey(token); ok {
-			next.ServeHTTP(w, gateway.Annotate(r, "api", name))
+		if k, ok := s.Store.ValidateAPIKey(token); ok {
+			next.ServeHTTP(w, gateway.AnnotateKey(r, k))
 			return
 		}
 		writeError(w, 401, "A valid Nexa API key or master key is required.")
@@ -215,51 +225,6 @@ func (s *Server) sameOrigin(next http.Handler) http.Handler {
 	})
 }
 
-// limiter blocks an address after 10 failed logins until its 10-minute window resets.
-type limiter struct {
-	mu   sync.Mutex
-	hits map[string]*window
-}
-type window struct {
-	count int
-	reset time.Time
-}
-
-const (
-	loginFailures = 10
-	loginWindow   = 10 * time.Minute
-)
-
-func (l *limiter) blocked(key string) time.Duration {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if w, ok := l.hits[key]; ok && w.count >= loginFailures && time.Now().Before(w.reset) {
-		return time.Until(w.reset)
-	}
-	return 0
-}
-func (l *limiter) fail(key string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	now := time.Now()
-	for k, w := range l.hits { // ponytail: sweep on write; fine for login-rate traffic
-		if now.After(w.reset) {
-			delete(l.hits, k)
-		}
-	}
-	w, ok := l.hits[key]
-	if !ok {
-		w = &window{reset: now.Add(loginWindow)}
-		l.hits[key] = w
-	}
-	w.count++
-}
-func (l *limiter) clear(key string) {
-	l.mu.Lock()
-	delete(l.hits, key)
-	l.mu.Unlock()
-}
-
 func clientIP(r *http.Request) string {
 	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
 		return host
@@ -273,7 +238,7 @@ func (s *Server) setSession(w http.ResponseWriter, token string) {
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	ip := clientIP(r)
-	if wait := s.logins.blocked(ip); wait > 0 {
+	if wait := s.Store.LoginBlocked(r.Context(), ip); wait > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
 		writeError(w, 429, "Too many failed sign-in attempts. Try again in a few minutes.")
 		return
@@ -286,7 +251,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case in.MasterKey != "":
 		if !s.Store.ValidateMaster(in.MasterKey) {
-			s.logins.fail(ip)
+			s.Store.LoginFailed(r.Context(), ip)
 			writeError(w, 401, "Invalid master key.")
 			return
 		}
@@ -294,7 +259,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	case in.Username != "":
 		u, err := s.Store.LoginUser(in.Username, in.Password)
 		if err != nil {
-			s.logins.fail(ip)
+			s.Store.LoginFailed(r.Context(), ip)
 			writeError(w, 401, "Invalid username or password.")
 			return
 		}
@@ -303,7 +268,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 401, "Enter a master key or a username and password.")
 		return
 	}
-	s.logins.clear(ip)
+	s.Store.LoginSucceeded(r.Context(), ip)
 	token, err := s.Store.CreateSession(info.UserID, info.Master)
 	if err != nil {
 		writeError(w, 500, "Could not create session.")
@@ -727,13 +692,7 @@ func slicesContains(v []string, x string) bool {
 	return false
 }
 func (s *Server) traces(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	f := store.TraceQuery{Search: q.Get("search"), Status: q.Get("status"), ProviderID: q.Get("provider"), Model: q.Get("model")}
-	f.Limit, _ = strconv.Atoi(q.Get("limit"))
-	f.Offset, _ = strconv.Atoi(q.Get("offset"))
-	f.From, _ = time.Parse(time.RFC3339, q.Get("from"))
-	f.To, _ = time.Parse(time.RFC3339, q.Get("to"))
-	v, total, err := s.Store.Traces(f)
+	v, total, err := s.Store.Traces(traceFilters(r))
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return
@@ -847,6 +806,10 @@ func (s *Server) apiKeys(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, 500, err.Error())
 		return
+	}
+	spends := s.Store.KeySpends(store.MonthStart(time.Now()))
+	for i := range v {
+		v[i].SpentMonth = spends[v[i].ID]
 	}
 	writeJSON(w, 200, v)
 }

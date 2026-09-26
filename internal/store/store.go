@@ -22,15 +22,17 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/bcrypt"
-	_ "modernc.org/sqlite"
 )
 
 var ErrProviderInUse = errors.New("provider is used by a routing profile")
 
 type Store struct {
-	DB   *sql.DB
-	aead cipher.AEAD
+	DB     *DB           // PostgreSQL: durable configuration, traces and ratings
+	Redis  *redis.Client // shared cache, rate limits and change notifications
+	aead   cipher.AEAD
+	events eventHub
 
 	// In-memory caches for data read on every gateway request. Each is nil until
 	// first use and reset to nil by any write, so the next read reloads it.
@@ -88,6 +90,8 @@ type Trace struct {
 	Error           string    `json:"error,omitempty"`
 	CreatedAt       time.Time `json:"created_at"`
 	Metadata        string    `json:"metadata,omitempty"`
+	APIKeyID        string    `json:"api_key_id,omitempty"`
+	ExtraCostUSD    float64   `json:"-"` // spend besides the completion itself (e.g. cache embeddings)
 }
 
 type Stats struct {
@@ -170,6 +174,8 @@ type APIKey struct {
 	Prefix     string     `json:"prefix"`
 	CreatedAt  time.Time  `json:"created_at"`
 	LastUsedAt *time.Time `json:"last_used_at"`
+	Limits     KeyLimits  `json:"limits"`
+	SpentMonth float64    `json:"spent_month_usd"`
 	hash       string
 }
 
@@ -213,11 +219,13 @@ type RoutingTarget struct {
 	Enabled              bool     `json:"enabled"`
 }
 
-func Open(dataDir string) (*Store, string, error) {
-	if err := os.MkdirAll(dataDir, 0700); err != nil {
-		return nil, "", err
+// Open connects to PostgreSQL and Redis, applies migrations and returns the
+// first-start master key.
+func Open(dataDir, databaseURL, redisURL string) (*Store, string, error) {
+	if databaseURL == "" || redisURL == "" {
+		return nil, "", errors.New("NEXA_DATABASE_URL (PostgreSQL) and NEXA_REDIS_URL (Redis Stack) are required")
 	}
-	key, err := loadOrCreateKey(filepath.Join(dataDir, "secret.key"))
+	key, err := encryptionKey(dataDir)
 	if err != nil {
 		return nil, "", err
 	}
@@ -229,19 +237,49 @@ func Open(dataDir string) (*Store, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	db, err := sql.Open("sqlite", filepath.Join(dataDir, "nexa.db")+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)")
+	db, err := openPostgres(databaseURL)
 	if err != nil {
-		return nil, "", err
+		return nil, "", fmt.Errorf("PostgreSQL: %w", err)
 	}
-	// WAL lets readers run beside the single writer; busy_timeout serializes writes.
-	db.SetMaxOpenConns(8)
-	s := &Store{DB: db, aead: aead, keyUsed: map[string]time.Time{}}
-	if err := s.migrate(); err != nil {
+	rdb, err := openRedis(redisURL)
+	if err != nil {
 		db.Close()
-		return nil, "", err
+		return nil, "", fmt.Errorf("Redis: %w", err)
+	}
+	s := &Store{DB: db, Redis: rdb, aead: aead, keyUsed: map[string]time.Time{}, events: eventHub{handlers: map[string][]func(){}}}
+	if err := s.migrate(); err != nil {
+		s.Close()
+		return nil, "", fmt.Errorf("migrations: %w", err)
+	}
+	s.OnEvent("providers", func() { s.mu.Lock(); s.providers, s.profiles = nil, nil; s.mu.Unlock() })
+	s.OnEvent("prices", func() { s.mu.Lock(); s.prices = nil; s.mu.Unlock() })
+	s.OnEvent("apikeys", func() { s.mu.Lock(); s.apiKeys = nil; s.mu.Unlock() })
+	s.OnEvent("feedback", func() { s.feedbackVersion.Add(1) })
+	s.OnEvent("master", s.reloadMaster)
+	go s.listen()
+	if err := s.ensureJudgeGroup(context.Background()); err != nil {
+		s.Close()
+		return nil, "", fmt.Errorf("Redis judging queue: %w", err)
 	}
 	masterKey, err := s.ensureMasterKey()
 	return s, masterKey, err
+}
+
+// encryptionKey reads NEXA_ENCRYPTION_KEY (32 bytes, base64 or hex) or the
+// secret.key file in the data directory, creating it on first start.
+func encryptionKey(dataDir string) ([]byte, error) {
+	if v := strings.TrimSpace(os.Getenv("NEXA_ENCRYPTION_KEY")); v != "" {
+		for _, decode := range []func(string) ([]byte, error){base64.StdEncoding.DecodeString, base64.RawURLEncoding.DecodeString, hex.DecodeString} {
+			if b, err := decode(v); err == nil && len(b) == 32 {
+				return b, nil
+			}
+		}
+		return nil, errors.New("NEXA_ENCRYPTION_KEY must be 32 bytes, base64 or hex encoded")
+	}
+	if err := os.MkdirAll(dataDir, 0700); err != nil {
+		return nil, err
+	}
+	return loadOrCreateKey(filepath.Join(dataDir, "secret.key"))
 }
 
 func loadOrCreateKey(path string) ([]byte, error) {
@@ -259,118 +297,6 @@ func loadOrCreateKey(path string) ([]byte, error) {
 		return nil, err
 	}
 	return b, nil
-}
-
-func (s *Store) migrate() error {
-	_, err := s.DB.Exec(`
-CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS users (
- id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE COLLATE NOCASE, password_hash TEXT NOT NULL,
- role TEXT NOT NULL DEFAULT 'member', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS sessions (
- id TEXT PRIMARY KEY, user_id TEXT, is_master INTEGER NOT NULL DEFAULT 0,
- expires_at DATETIME NOT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
- FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS providers (
- id TEXT PRIMARY KEY, name TEXT NOT NULL, slug TEXT NOT NULL UNIQUE COLLATE NOCASE,
- type TEXT NOT NULL, base_url TEXT NOT NULL, api_key TEXT NOT NULL,
- enabled INTEGER NOT NULL DEFAULT 1, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS traces (
- id TEXT PRIMARY KEY, provider_id TEXT, provider_name TEXT NOT NULL, model TEXT NOT NULL,
- status TEXT NOT NULL, status_code INTEGER NOT NULL, prompt TEXT NOT NULL DEFAULT '',
- response TEXT NOT NULL DEFAULT '', input_tokens INTEGER NOT NULL DEFAULT 0,
- output_tokens INTEGER NOT NULL DEFAULT 0, total_tokens INTEGER NOT NULL DEFAULT 0,
- latency_ms INTEGER NOT NULL DEFAULT 0, upstream_latency_ms REAL NOT NULL DEFAULT 0,
- gateway_latency_ms REAL NOT NULL DEFAULT 0, cost_usd REAL NOT NULL DEFAULT 0,
- error TEXT NOT NULL DEFAULT '', metadata TEXT NOT NULL DEFAULT '',
- created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS routing_profiles (
- id TEXT PRIMARY KEY, name TEXT NOT NULL, slug TEXT NOT NULL UNIQUE COLLATE NOCASE,
- engine TEXT NOT NULL, objective TEXT NOT NULL, config_json TEXT NOT NULL,
- jev_api_key TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 0,
- created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
- updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS routing_attempts (
- id INTEGER PRIMARY KEY AUTOINCREMENT, provider_id TEXT NOT NULL, model TEXT NOT NULL,
- status TEXT NOT NULL, latency_ms REAL NOT NULL DEFAULT 0,
- created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE TABLE IF NOT EXISTS api_keys (
- id TEXT PRIMARY KEY, name TEXT NOT NULL, key_hash TEXT NOT NULL UNIQUE, prefix TEXT NOT NULL,
- created_at DATETIME NOT NULL, last_used_at DATETIME
-);
-CREATE TABLE IF NOT EXISTS model_prices (
- model TEXT PRIMARY KEY COLLATE NOCASE, input REAL NOT NULL, output REAL NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_traces_created ON traces(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_traces_provider ON traces(provider_id);
-CREATE INDEX IF NOT EXISTS idx_traces_route ON traces(provider_id,model,created_at);
-CREATE INDEX IF NOT EXISTS idx_routing_active ON routing_profiles(active);
-CREATE INDEX IF NOT EXISTS idx_routing_attempt_health ON routing_attempts(provider_id,model,created_at DESC);
-`)
-	if err != nil {
-		return err
-	}
-	for _, c := range [][3]string{
-		{"traces", "upstream_latency_ms", "REAL NOT NULL DEFAULT 0"},
-		{"traces", "gateway_latency_ms", "REAL NOT NULL DEFAULT 0"},
-		{"traces", "request_id", "TEXT NOT NULL DEFAULT ''"},
-		{"traces", "source", "TEXT NOT NULL DEFAULT ''"},
-		{"traces", "api_key_name", "TEXT NOT NULL DEFAULT ''"},
-		{"traces", "stream", "INTEGER NOT NULL DEFAULT 0"},
-		{"traces", "ttft_ms", "REAL NOT NULL DEFAULT 0"},
-		{"traces", "finish_reason", "TEXT NOT NULL DEFAULT ''"},
-		{"traces", "params", "TEXT NOT NULL DEFAULT ''"},
-		{"traces", "request", "TEXT NOT NULL DEFAULT ''"},
-		{"traces", "cached_tokens", "INTEGER NOT NULL DEFAULT 0"},
-		{"traces", "reasoning_tokens", "INTEGER NOT NULL DEFAULT 0"},
-		{"providers", "headers", "TEXT NOT NULL DEFAULT ''"},
-	} {
-		if err := s.ensureColumn(c[0], c[1], c[2]); err != nil {
-			return err
-		}
-	}
-	// Session ids are now stored as SHA-256 hex (64 chars); older raw ids can never match.
-	if _, err = s.DB.Exec("DELETE FROM sessions WHERE length(id)!=64 OR expires_at<?", time.Now().UTC()); err != nil {
-		return err
-	}
-	// The bundled local classifier was removed; existing profiles move to Jev.
-	if _, err = s.DB.Exec("UPDATE routing_profiles SET engine='jev' WHERE engine!='jev'"); err != nil {
-		return err
-	}
-	if err = s.migrateFeedback(); err != nil {
-		return err
-	}
-	_, err = s.DB.Exec("DELETE FROM routing_attempts WHERE created_at<? OR provider_id NOT IN (SELECT id FROM providers)", time.Now().UTC().Add(-24*time.Hour))
-	return err
-}
-
-func (s *Store) ensureColumn(table, column, definition string) error {
-	rows, err := s.DB.Query("PRAGMA table_info(" + table + ")")
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var cid int
-		var name, kind string
-		var notNull int
-		var defaultValue any
-		var primaryKey int
-		if err := rows.Scan(&cid, &name, &kind, &notNull, &defaultValue, &primaryKey); err != nil {
-			return err
-		}
-		if name == column {
-			return nil
-		}
-	}
-	_, err = s.DB.Exec("ALTER TABLE " + table + " ADD COLUMN " + column + " " + definition)
-	return err
 }
 
 // Prune applies trace retention (0 keeps traces forever) and clears expired housekeeping rows.
@@ -419,7 +345,36 @@ func (s *Store) ensureMasterKey() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return master, s.saveMaster(master)
+	hash, err := bcrypt.GenerateFromPassword([]byte(master), bcrypt.DefaultCost)
+	if err != nil {
+		return "", err
+	}
+	// Several instances may start at once on an empty database: only the one
+	// whose insert wins creates (and prints) the master key.
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec("INSERT INTO settings(key,value) VALUES('master_key_hash',?) ON CONFLICT(key) DO NOTHING", string(hash))
+	if err != nil {
+		return "", err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		tx.Rollback()
+		s.reloadMaster()
+		return "", nil
+	}
+	if _, err = tx.Exec("INSERT INTO settings(key,value) VALUES('master_key_sha256',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", shaHex(master)); err != nil {
+		return "", err
+	}
+	if err = tx.Commit(); err != nil {
+		return "", err
+	}
+	s.mu.Lock()
+	s.masterSHA = sha(master)
+	s.mu.Unlock()
+	return master, nil
 }
 
 func (s *Store) saveMaster(master string) error {
@@ -443,7 +398,19 @@ func (s *Store) saveMaster(master string) error {
 	s.mu.Lock()
 	s.masterSHA = sha(master)
 	s.mu.Unlock()
+	s.Publish("master") // other instances stop accepting the previous key
 	return nil
+}
+
+func (s *Store) reloadMaster() {
+	var digest string
+	if s.DB.QueryRow("SELECT value FROM settings WHERE key='master_key_sha256'").Scan(&digest) == nil {
+		if b, err := hex.DecodeString(digest); err == nil {
+			s.mu.Lock()
+			s.masterSHA = b
+			s.mu.Unlock()
+		}
+	}
 }
 
 func (s *Store) ValidateMaster(key string) bool {
@@ -480,7 +447,7 @@ func (s *Store) ResetMasterKey() (string, error) {
 	if err := s.saveMaster(master); err != nil {
 		return "", err
 	}
-	_, err = s.DB.Exec("DELETE FROM sessions WHERE is_master=1")
+	_, err = s.DB.Exec("DELETE FROM sessions WHERE is_master")
 	return master, err
 }
 
@@ -509,11 +476,8 @@ func MaskKey(key string) string {
 	return key[:4] + "••••••••" + key[len(key)-4:]
 }
 
-func (s *Store) invalidate() {
-	s.mu.Lock()
-	s.providers, s.profiles = nil, nil
-	s.mu.Unlock()
-}
+// invalidate drops cached providers and profiles on every instance.
+func (s *Store) invalidate() { s.Publish("providers") }
 
 func validProviderType(t string) bool {
 	switch t {
@@ -944,10 +908,10 @@ func (s *Store) ActivateRoutingProfile(id string) error {
 		return e
 	}
 	defer tx.Rollback()
-	if _, e = tx.Exec("UPDATE routing_profiles SET active=0"); e != nil {
+	if _, e = tx.Exec("UPDATE routing_profiles SET active=FALSE"); e != nil {
 		return e
 	}
-	res, e := tx.Exec("UPDATE routing_profiles SET active=1,updated_at=? WHERE id=?", time.Now().UTC(), id)
+	res, e := tx.Exec("UPDATE routing_profiles SET active=TRUE,updated_at=? WHERE id=?", time.Now().UTC(), id)
 	if e != nil {
 		return e
 	}
@@ -981,7 +945,7 @@ func (s *Store) RoutingHealth(providerID, model string) RouteHealth {
 	 SELECT status,upstream_latency_ms AS latency FROM traces WHERE provider_id=? AND model=? AND created_at>=?
 	 UNION ALL
 	 SELECT status,latency_ms AS latency FROM routing_attempts WHERE provider_id=? AND model=? AND created_at>=?
-	)`, providerID, model, since, providerID, model, since).Scan(&h.Requests, &h.Failures, &h.AvgLatencyMS)
+	) AS recent`, providerID, model, since, providerID, model, since).Scan(&h.Requests, &h.Failures, &h.AvgLatencyMS)
 	return h
 }
 func (s *Store) RecordRoutingFailure(providerID, model string, latencyMS float64) {
@@ -1004,10 +968,22 @@ func slugify(v string) string {
 	return strings.Trim(b.String(), "-")
 }
 
-const traceColumns = "id,request_id,source,api_key_name,provider_id,provider_name,model,status,status_code,stream,prompt,request,params,response,finish_reason,input_tokens,output_tokens,total_tokens,cached_tokens,reasoning_tokens,latency_ms,ttft_ms,upstream_latency_ms,gateway_latency_ms,cost_usd,error,metadata,created_at"
+const traceColumns = "id,request_id,source,api_key_name,provider_id,provider_name,model,status,status_code,stream,prompt,request,params,response,finish_reason,input_tokens,output_tokens,total_tokens,cached_tokens,reasoning_tokens,latency_ms,ttft_ms,upstream_latency_ms,gateway_latency_ms,cost_usd,error,metadata,created_at,api_key_id"
+
+// traceSelect reads the same columns, with JSONB metadata as text.
+var traceMetadataIndex = func() int {
+	for i, c := range strings.Split(traceColumns, ",") {
+		if c == "metadata" {
+			return i
+		}
+	}
+	panic("traces: no metadata column")
+}()
+
+var traceSelect = strings.Replace(traceColumns, "metadata", "COALESCE(metadata::text,'')", 1)
 
 func (t *Trace) fields() []any {
-	return []any{&t.ID, &t.RequestID, &t.Source, &t.APIKeyName, &t.ProviderID, &t.ProviderName, &t.Model, &t.Status, &t.StatusCode, &t.Stream, &t.Prompt, &t.Request, &t.Params, &t.Response, &t.FinishReason, &t.InputTokens, &t.OutputTokens, &t.TotalTokens, &t.CachedTokens, &t.ReasoningTokens, &t.LatencyMS, &t.TTFTMS, &t.UpstreamMS, &t.GatewayMS, &t.CostUSD, &t.Error, &t.Metadata, &t.CreatedAt}
+	return []any{&t.ID, &t.RequestID, &t.Source, &t.APIKeyName, &t.ProviderID, &t.ProviderName, &t.Model, &t.Status, &t.StatusCode, &t.Stream, &t.Prompt, &t.Request, &t.Params, &t.Response, &t.FinishReason, &t.InputTokens, &t.OutputTokens, &t.TotalTokens, &t.CachedTokens, &t.ReasoningTokens, &t.LatencyMS, &t.TTFTMS, &t.UpstreamMS, &t.GatewayMS, &t.CostUSD, &t.Error, &t.Metadata, &t.CreatedAt, &t.APIKeyID}
 }
 
 func (s *Store) AddTrace(t Trace) error {
@@ -1017,11 +993,20 @@ func (s *Store) AddTrace(t Trace) error {
 	if t.CreatedAt.IsZero() {
 		t.CreatedAt = time.Now().UTC()
 	}
-	values := []any{}
-	for _, f := range t.fields() {
-		values = append(values, reflectDeref(f))
+	if t.Metadata != "" && !json.Valid([]byte(t.Metadata)) {
+		b, _ := json.Marshal(map[string]string{"raw": t.Metadata})
+		t.Metadata = string(b)
 	}
-	_, err := s.DB.Exec("INSERT INTO traces("+traceColumns+") VALUES(?"+strings.Repeat(",?", len(values)-1)+")", values...)
+	values, marks := []any{}, []string{}
+	for i, f := range t.fields() {
+		values = append(values, reflectDeref(f))
+		if i == traceMetadataIndex {
+			marks = append(marks, "NULLIF(?,'')::jsonb")
+		} else {
+			marks = append(marks, "?")
+		}
+	}
+	_, err := s.DB.Exec("INSERT INTO traces("+traceColumns+") VALUES("+strings.Join(marks, ",")+")", values...)
 	return err
 }
 
@@ -1051,10 +1036,7 @@ type TraceQuery struct {
 	From, To          time.Time
 }
 
-func (s *Store) Traces(f TraceQuery) ([]Trace, int, error) {
-	if f.Limit < 1 || f.Limit > 200 {
-		f.Limit = 50
-	}
+func traceWhere(f TraceQuery) (string, []any) {
 	q := " FROM traces WHERE 1=1"
 	args := []any{}
 	for _, term := range strings.Fields(strings.TrimSpace(f.Search)) {
@@ -1082,11 +1064,19 @@ func (s *Store) Traces(f TraceQuery) ([]Trace, int, error) {
 		q += " AND created_at<=?"
 		args = append(args, f.To.UTC())
 	}
+	return q, args
+}
+
+func (s *Store) Traces(f TraceQuery) ([]Trace, int, error) {
+	if f.Limit < 1 || f.Limit > 200 {
+		f.Limit = 50
+	}
+	q, args := traceWhere(f)
 	var total int
 	if err := s.DB.QueryRow("SELECT COUNT(*)"+q, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := s.DB.Query("SELECT "+traceColumns+q+" ORDER BY created_at DESC LIMIT ? OFFSET ?", append(args, f.Limit, max(f.Offset, 0))...)
+	rows, err := s.DB.Query("SELECT "+traceSelect+q+" ORDER BY created_at DESC LIMIT ? OFFSET ?", append(args, f.Limit, max(f.Offset, 0))...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -1102,9 +1092,29 @@ func (s *Store) Traces(f TraceQuery) ([]Trace, int, error) {
 	return out, total, rows.Err()
 }
 
+// EachTrace streams every trace matching the filters, newest first (for exports).
+func (s *Store) EachTrace(f TraceQuery, fn func(Trace) error) error {
+	q, args := traceWhere(f)
+	rows, err := s.DB.Query("SELECT "+traceSelect+q+" ORDER BY created_at DESC", args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var t Trace
+		if err := rows.Scan(t.fields()...); err != nil {
+			return err
+		}
+		if err := fn(t); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
 func (s *Store) Trace(id string) (Trace, error) {
 	var t Trace
-	err := s.DB.QueryRow("SELECT "+traceColumns+" FROM traces WHERE id=?", id).Scan(t.fields()...)
+	err := s.DB.QueryRow("SELECT "+traceSelect+" FROM traces WHERE id=?", id).Scan(t.fields()...)
 	return t, err
 }
 
@@ -1125,155 +1135,84 @@ func (s *Store) Stats(from, to time.Time, bucket time.Duration, rangeName string
 		at := from.Add(time.Duration(i) * bucket)
 		x.Hourly = append(x.Hourly, Point{Hour: pointLabel(at, to.Sub(from)), Timestamp: at})
 	}
-	type totals struct {
-		upstream, gateway float64
-		count             int64
-	}
-	bucketTotals := make([]totals, len(x.Hourly))
-	latencies := []int64{}
-	type breakdownAccumulator struct {
-		StatsBreakdown
-		latencies []int64
-	}
-	providers := map[string]*breakdownAccumulator{}
-	models := map[string]*breakdownAccumulator{}
-	routing := map[string]*RoutingUsage{}
-	rows, err := s.DB.Query(`SELECT COALESCE(provider_id,''),provider_name,model,status,total_tokens,cost_usd,latency_ms,upstream_latency_ms,gateway_latency_ms,metadata,created_at FROM traces WHERE created_at>=? AND created_at<=? ORDER BY created_at`, from.UTC(), to.UTC())
+	var successes int64
+	var p50, p95 float64
+	err := s.DB.QueryRow(`SELECT COUNT(*), COUNT(*) FILTER (WHERE status='success'), COALESCE(SUM(total_tokens),0), COALESCE(SUM(cost_usd),0),
+ COALESCE(AVG(latency_ms),0), COALESCE(AVG(upstream_latency_ms),0), COALESCE(AVG(gateway_latency_ms),0),
+ COALESCE(percentile_disc(0.5) WITHIN GROUP (ORDER BY latency_ms),0), COALESCE(percentile_disc(0.95) WITHIN GROUP (ORDER BY latency_ms),0)
+ FROM traces WHERE created_at>=? AND created_at<=?`, from.UTC(), to.UTC()).
+		Scan(&x.Requests, &successes, &x.Tokens24H, &x.Cost24H, &x.AvgLatencyMS, &x.AvgUpstreamMS, &x.AvgGatewayMS, &p50, &p95)
 	if err != nil {
 		return x, err
 	}
-	defer rows.Close()
-	var successes int64
-	for rows.Next() {
-		var providerID, providerName, model, status, metadata string
-		var tokens int64
-		var cost float64
-		var latency int64
-		var upstream, gateway float64
-		var created time.Time
-		if err := rows.Scan(&providerID, &providerName, &model, &status, &tokens, &cost, &latency, &upstream, &gateway, &metadata, &created); err != nil {
-			return x, err
-		}
-		x.Requests++
-		x.Tokens24H += tokens
-		x.Cost24H += cost
-		x.AvgLatencyMS += float64(latency)
-		x.AvgUpstreamMS += float64(upstream)
-		x.AvgGatewayMS += float64(gateway)
-		latencies = append(latencies, latency)
-		if status == "success" {
-			successes++
-		}
-		idx := int(created.Sub(from) / bucket)
-		if idx < 0 {
-			idx = 0
-		}
-		if idx >= len(x.Hourly) {
-			idx = len(x.Hourly) - 1
-		}
-		x.Hourly[idx].Requests++
-		x.Hourly[idx].Tokens += tokens
-		x.Hourly[idx].Cost += cost
-		if status != "success" {
-			x.Hourly[idx].Errors++
-		}
-		providerKey := providerID
-		if providerKey == "" {
-			providerKey = providerName
-		}
-		if providers[providerKey] == nil {
-			providers[providerKey] = &breakdownAccumulator{StatsBreakdown: StatsBreakdown{ProviderID: providerID, ProviderName: providerName}}
-		}
-		provider := providers[providerKey]
-		provider.Requests++
-		provider.Cost += cost
-		provider.latencies = append(provider.latencies, latency)
-		if status != "success" {
-			provider.Errors++
-		}
-		modelKey := providerKey + "\x00" + model
-		if models[modelKey] == nil {
-			models[modelKey] = &breakdownAccumulator{StatsBreakdown: StatsBreakdown{ProviderID: providerID, ProviderName: providerName, Model: model}}
-		}
-		modelStats := models[modelKey]
-		modelStats.Requests++
-		modelStats.Cost += cost
-		modelStats.latencies = append(modelStats.latencies, latency)
-		if status != "success" {
-			modelStats.Errors++
-		}
-		var meta struct {
-			SmartRouting bool   `json:"smart_routing"`
-			ProfileSlug  string `json:"profile_slug"`
-			Lane         string `json:"lane"`
-			Signals      struct {
-				Lane       string `json:"lane"`
-				Complexity string `json:"complexity"`
-			} `json:"signals"`
-		}
-		if json.Unmarshal([]byte(metadata), &meta) == nil && meta.SmartRouting {
-			x.SmartRequests++
-			lane := meta.Signals.Lane
-			if lane == "" {
-				lane = meta.Lane
-			}
-			if lane == "" {
-				lane = meta.Signals.Complexity
-			}
-			key := meta.ProfileSlug + "\x00" + lane
-			if routing[key] == nil {
-				routing[key] = &RoutingUsage{ProfileSlug: meta.ProfileSlug, Lane: lane}
-			}
-			routing[key].Requests++
-		}
-		bucketTotals[idx].upstream += float64(upstream)
-		bucketTotals[idx].gateway += float64(gateway)
-		bucketTotals[idx].count++
-	}
-	if err := rows.Err(); err != nil {
-		return x, err
-	}
-	x.Requests24H = x.Requests
+	x.Requests24H, x.P50LatencyMS, x.P95LatencyMS = x.Requests, p50, p95
 	if x.Requests > 0 {
 		x.SuccessRate = 100 * float64(successes) / float64(x.Requests)
-		x.AvgLatencyMS /= float64(x.Requests)
-		x.AvgUpstreamMS /= float64(x.Requests)
-		x.AvgGatewayMS /= float64(x.Requests)
-		sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
-		x.P50LatencyMS = float64(latencies[(len(latencies)-1)*50/100])
-		x.P95LatencyMS = float64(latencies[(len(latencies)-1)*95/100])
 	}
-	for i := range x.Hourly {
-		if bucketTotals[i].count > 0 {
-			x.Hourly[i].UpstreamMS = bucketTotals[i].upstream / float64(bucketTotals[i].count)
-			x.Hourly[i].GatewayMS = bucketTotals[i].gateway / float64(bucketTotals[i].count)
+	rows, err := s.DB.Query(`SELECT LEAST(GREATEST(floor(extract(epoch FROM created_at - ?::timestamptz) / ?)::int, 0), ?) AS idx,
+ COUNT(*), COUNT(*) FILTER (WHERE status<>'success'), COALESCE(SUM(total_tokens),0), COALESCE(SUM(cost_usd),0),
+ COALESCE(AVG(upstream_latency_ms),0), COALESCE(AVG(gateway_latency_ms),0)
+ FROM traces WHERE created_at>=? AND created_at<=? GROUP BY idx`, from.UTC(), bucket.Seconds(), len(x.Hourly)-1, from.UTC(), to.UTC())
+	if err != nil {
+		return x, err
+	}
+	for rows.Next() {
+		var idx int
+		var p Point
+		if err := rows.Scan(&idx, &p.Requests, &p.Errors, &p.Tokens, &p.Cost, &p.UpstreamMS, &p.GatewayMS); err != nil {
+			rows.Close()
+			return x, err
 		}
+		h := &x.Hourly[idx]
+		h.Requests, h.Errors, h.Tokens, h.Cost, h.UpstreamMS, h.GatewayMS = p.Requests, p.Errors, p.Tokens, p.Cost, p.UpstreamMS, p.GatewayMS
 	}
-	finishBreakdown := func(values map[string]*breakdownAccumulator) []StatsBreakdown {
-		out := make([]StatsBreakdown, 0, len(values))
-		for _, value := range values {
-			sort.Slice(value.latencies, func(i, j int) bool { return value.latencies[i] < value.latencies[j] })
-			if len(value.latencies) > 0 {
-				value.P95LatencyMS = float64(value.latencies[(len(value.latencies)-1)*95/100])
+	rows.Close()
+	breakdown := func(model bool) ([]StatsBreakdown, error) {
+		group, pick := "COALESCE(NULLIF(provider_id,''), provider_name)", "''"
+		if model {
+			group, pick = group+", model", "model"
+		}
+		rows, err := s.DB.Query(`SELECT COALESCE(MAX(provider_id),''), MAX(provider_name), `+pick+` AS model, COUNT(*), COUNT(*) FILTER (WHERE status<>'success'),
+ COALESCE(SUM(cost_usd),0), COALESCE(percentile_disc(0.95) WITHIN GROUP (ORDER BY latency_ms),0)
+ FROM traces WHERE created_at>=? AND created_at<=? GROUP BY `+group+` ORDER BY 4 DESC`, from.UTC(), to.UTC())
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		out := []StatsBreakdown{}
+		for rows.Next() {
+			var b StatsBreakdown
+			if err := rows.Scan(&b.ProviderID, &b.ProviderName, &b.Model, &b.Requests, &b.Errors, &b.Cost, &b.P95LatencyMS); err != nil {
+				return nil, err
 			}
-			out = append(out, value.StatsBreakdown)
+			out = append(out, b)
 		}
-		sort.Slice(out, func(i, j int) bool { return out[i].Requests > out[j].Requests })
-		return out
+		return out, rows.Err()
 	}
-	x.ByProvider = finishBreakdown(providers)
-	x.ByModel = finishBreakdown(models)
-	for _, value := range routing {
-		x.Routing = append(x.Routing, *value)
+	if x.ByProvider, err = breakdown(false); err != nil {
+		return x, err
 	}
-	sort.Slice(x.Routing, func(i, j int) bool {
-		if x.Routing[i].ProfileSlug == x.Routing[j].ProfileSlug {
-			return x.Routing[i].Lane < x.Routing[j].Lane
+	if x.ByModel, err = breakdown(true); err != nil {
+		return x, err
+	}
+	rows, err = s.DB.Query(`SELECT COALESCE(metadata->>'profile_slug',''),
+ COALESCE(NULLIF(metadata->'signals'->>'lane',''), NULLIF(metadata->>'lane',''), metadata->'signals'->>'complexity', '') AS lane, COUNT(*)
+ FROM traces WHERE created_at>=? AND created_at<=? AND metadata->>'smart_routing'='true' GROUP BY 1, 2 ORDER BY 1, 2`, from.UTC(), to.UTC())
+	if err != nil {
+		return x, err
+	}
+	for rows.Next() {
+		var u RoutingUsage
+		if err := rows.Scan(&u.ProfileSlug, &u.Lane, &u.Requests); err != nil {
+			rows.Close()
+			return x, err
 		}
-		return x.Routing[i].ProfileSlug < x.Routing[j].ProfileSlug
-	})
+		x.Routing = append(x.Routing, u)
+		x.SmartRequests += u.Requests
+	}
+	rows.Close()
 	x.Previous = s.statsPrevious(from.Add(-to.Sub(from)), from)
-	_ = s.DB.QueryRow("SELECT COUNT(*) FROM providers WHERE enabled=1").Scan(&x.Providers)
+	_ = s.DB.QueryRow("SELECT COUNT(*) FROM providers WHERE enabled").Scan(&x.Providers)
 	return x, nil
 }
 
@@ -1448,14 +1387,12 @@ func (s *Store) CreateAPIKey(name string) (APIKey, string, error) {
 	if _, err = s.DB.Exec("INSERT INTO api_keys(id,name,key_hash,prefix,created_at) VALUES(?,?,?,?,?)", k.ID, k.Name, shaHex(plain), k.Prefix, k.CreatedAt); err != nil {
 		return APIKey{}, "", err
 	}
-	s.mu.Lock()
-	s.apiKeys = nil
-	s.mu.Unlock()
+	s.Publish("apikeys")
 	return k, plain, nil
 }
 
 func (s *Store) APIKeys() ([]APIKey, error) {
-	rows, err := s.DB.Query("SELECT id,name,key_hash,prefix,created_at,last_used_at FROM api_keys ORDER BY created_at DESC")
+	rows, err := s.DB.Query("SELECT id,name,key_hash,prefix,created_at,last_used_at,limits_json FROM api_keys ORDER BY created_at DESC")
 	if err != nil {
 		return nil, err
 	}
@@ -1464,8 +1401,12 @@ func (s *Store) APIKeys() ([]APIKey, error) {
 	for rows.Next() {
 		var k APIKey
 		var used sql.NullTime
-		if err := rows.Scan(&k.ID, &k.Name, &k.hash, &k.Prefix, &k.CreatedAt, &used); err != nil {
+		var limits string
+		if err := rows.Scan(&k.ID, &k.Name, &k.hash, &k.Prefix, &k.CreatedAt, &used, &limits); err != nil {
 			return nil, err
+		}
+		if limits != "" {
+			_ = json.Unmarshal([]byte(limits), &k.Limits)
 		}
 		if used.Valid {
 			k.LastUsedAt = &used.Time
@@ -1483,16 +1424,14 @@ func (s *Store) DeleteAPIKey(id string) error {
 	if n, _ := res.RowsAffected(); n == 0 {
 		return sql.ErrNoRows
 	}
-	s.mu.Lock()
-	s.apiKeys = nil
-	s.mu.Unlock()
+	s.Publish("apikeys")
 	return nil
 }
 
-// ValidateAPIKey returns the key's name. last_used_at is written at most once a minute per key.
-func (s *Store) ValidateAPIKey(plain string) (string, bool) {
+// ValidateAPIKey returns the key (with its limits). last_used_at is written at most once a minute per key.
+func (s *Store) ValidateAPIKey(plain string) (APIKey, bool) {
 	if !strings.HasPrefix(plain, "nexa_sk_") {
-		return "", false
+		return APIKey{}, false
 	}
 	s.mu.RLock()
 	keys := s.apiKeys
@@ -1500,7 +1439,7 @@ func (s *Store) ValidateAPIKey(plain string) (string, bool) {
 	if keys == nil {
 		list, err := s.APIKeys()
 		if err != nil {
-			return "", false
+			return APIKey{}, false
 		}
 		keys = map[string]APIKey{}
 		for _, k := range list {
@@ -1513,7 +1452,7 @@ func (s *Store) ValidateAPIKey(plain string) (string, bool) {
 	digest := shaHex(plain)
 	k, ok := keys[digest]
 	if !ok {
-		return "", false
+		return APIKey{}, false
 	}
 	now := time.Now().UTC()
 	s.mu.Lock()
@@ -1525,7 +1464,7 @@ func (s *Store) ValidateAPIKey(plain string) (string, bool) {
 	if stale {
 		_, _ = s.DB.Exec("UPDATE api_keys SET last_used_at=? WHERE key_hash=?", now, digest)
 	}
-	return k.Name, true
+	return k, true
 }
 
 func (s *Store) loadPrices() map[string]Price {
@@ -1568,17 +1507,13 @@ func (s *Store) SetPrice(p Price) error {
 		return errors.New("model is required and prices cannot be negative")
 	}
 	_, err := s.DB.Exec("INSERT INTO model_prices(model,input,output) VALUES(?,?,?) ON CONFLICT(model) DO UPDATE SET input=excluded.input,output=excluded.output", p.Model, p.Input, p.Output)
-	s.mu.Lock()
-	s.prices = nil
-	s.mu.Unlock()
+	s.Publish("prices")
 	return err
 }
 
 func (s *Store) DeletePrice(model string) error {
 	_, err := s.DB.Exec("DELETE FROM model_prices WHERE model=?", model)
-	s.mu.Lock()
-	s.prices = nil
-	s.mu.Unlock()
+	s.Publish("prices")
 	return err
 }
 
@@ -1598,8 +1533,21 @@ func (s *Store) CustomPrice(model string) (Price, bool) {
 	return best, found
 }
 
-func (s *Store) Health(ctx context.Context) error { return s.DB.PingContext(ctx) }
-func (s *Store) Close() error                     { return s.DB.Close() }
+// Health checks both PostgreSQL and Redis.
+func (s *Store) Health(ctx context.Context) error {
+	if err := s.DB.PingContext(ctx); err != nil {
+		return fmt.Errorf("PostgreSQL: %w", err)
+	}
+	if err := s.Redis.Ping(ctx).Err(); err != nil {
+		return fmt.Errorf("Redis: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) Close() error {
+	s.Redis.Close()
+	return s.DB.Close()
+}
 func DuplicateError(err error) bool {
 	return err != nil && strings.Contains(strings.ToLower(err.Error()), "unique")
 }

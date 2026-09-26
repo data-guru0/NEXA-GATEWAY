@@ -13,7 +13,6 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/evolvue/nexa-gateway/internal/store"
@@ -23,7 +22,6 @@ const (
 	jevURL         = "https://api.typesafe.ai/v1/systemone"
 	jevInputChars  = 8000 // conversation tail sent to Jev
 	jevCacheTTL    = 10 * time.Minute
-	jevCacheMax    = 2000
 	jevTurnsToSend = 6
 )
 
@@ -61,22 +59,20 @@ type Decision struct {
 	EngineError      string         `json:"engine_error,omitempty"`
 }
 
+// jevResult is a Jev decision, shared by every instance through Redis for jevCacheTTL.
 type jevResult struct {
-	complexity    string
-	confidence    float64
-	probabilities map[string]float64
-	expires       time.Time
+	Complexity    string             `json:"complexity"`
+	Confidence    float64            `json:"confidence"`
+	Probabilities map[string]float64 `json:"probabilities"`
 }
 
 type Engine struct {
 	Store  *store.Store
 	Client *http.Client
-	mu     sync.Mutex
-	cache  map[string]jevResult
 }
 
 func New(s *store.Store) *Engine {
-	return &Engine{Store: s, Client: &http.Client{Timeout: 3 * time.Second}, cache: map[string]jevResult{}}
+	return &Engine{Store: s, Client: &http.Client{Timeout: 3 * time.Second}}
 }
 
 // JevInput renders what Jev judges: the system prompt plus the last few turns,
@@ -268,11 +264,9 @@ func (e *Engine) classify(ctx context.Context, p store.RoutingProfile, input str
 	cacheKey := sha256.Sum256([]byte(key + "\x00" + input))
 	id := hex.EncodeToString(cacheKey[:])
 	if useCache {
-		e.mu.Lock()
-		hit, ok := e.cache[id]
-		e.mu.Unlock()
-		if ok && time.Now().Before(hit.expires) {
-			return Signals{Complexity: hit.complexity, Confidence: hit.confidence, ComplexityProbabilities: hit.probabilities, Cached: true}, ""
+		var hit jevResult
+		if e.Store.CachedJSON(ctx, "jev:"+id, &hit) {
+			return Signals{Complexity: hit.Complexity, Confidence: hit.Confidence, ComplexityProbabilities: hit.Probabilities, Cached: true}, ""
 		}
 	}
 	body := map[string]any{"state": input, "model": "jev-latest", "questions": map[string]any{"complexity": map[string]any{"type": "choice", "instructions": "Classify only the reasoning difficulty of the latest request in this conversation.", "criteria": map[string]string{"low": "Simple lookup, definition, rewrite, extraction, or casual question", "medium": "A multi-step task requiring moderate reasoning or synthesis", "high": "Expert, ambiguous, high-stakes, or deeply technical reasoning"}}}}
@@ -314,13 +308,7 @@ func (e *Engine) classify(ctx context.Context, p store.RoutingProfile, input str
 			confidence = max(confidence, v)
 		}
 	}
-	e.mu.Lock()
-	// ponytail: whole-cache reset at the cap; an LRU is only worth it if hit rates suffer.
-	if len(e.cache) >= jevCacheMax {
-		e.cache = map[string]jevResult{}
-	}
-	e.cache[id] = jevResult{c.Choice, confidence, c.Probabilities, time.Now().Add(jevCacheTTL)}
-	e.mu.Unlock()
+	e.Store.CacheJSON(ctx, "jev:"+id, jevResult{c.Choice, confidence, c.Probabilities}, jevCacheTTL)
 	return Signals{Complexity: c.Choice, Confidence: confidence, ComplexityProbabilities: c.Probabilities, JevLatencyMS: elapsed}, ""
 }
 

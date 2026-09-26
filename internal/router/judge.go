@@ -26,10 +26,15 @@ func JevKey(explicit string) string {
 // Judge asks Jev whether a response is a good answer to the conversation.
 // It returns "liked" or "disliked" with Jev's confidence in that verdict.
 func (e *Engine) Judge(ctx context.Context, key string, conversation json.RawMessage, response string) (string, float64, error) {
+	return e.JudgeText(ctx, key, JevInput(conversation), response)
+}
+
+// JudgeText is Judge for a conversation already rendered with JevInput (as queued jobs carry it).
+func (e *Engine) JudgeText(ctx context.Context, key, input, response string) (string, float64, error) {
 	if key == "" {
 		return "", 0, errors.New("JEV_API_KEY is not configured")
 	}
-	state := JevInput(conversation) + "\n\nASSISTANT RESPONSE:\n" + tail(strings.TrimSpace(response), jevInputChars)
+	state := input + "\n\nASSISTANT RESPONSE:\n" + tail(strings.TrimSpace(response), jevInputChars)
 	body := map[string]any{"state": state, "model": "jev-latest", "questions": map[string]any{"quality": map[string]any{
 		"type":         "choice",
 		"instructions": "Judge only the final ASSISTANT RESPONSE: would the person who asked the latest request be satisfied with it?",

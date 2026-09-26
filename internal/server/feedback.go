@@ -142,7 +142,8 @@ func (s *Server) feedbackStats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	arms := []map[string]any{}
-	served, leader, leaderProb := 0, "", -1.0
+	served := 0
+	lead := s.Gateway.LoopLeader(l, split)
 	for _, a := range l.Arms {
 		p, _ := s.Store.Provider(a.ProviderID)
 		counts := split.Counts[a.ID]
@@ -167,9 +168,6 @@ func (s *Server) feedbackStats(w http.ResponseWriter, r *http.Request) {
 		if t.Requests > 0 {
 			avgCost, errorRate = t.Cost/float64(t.Requests), float64(t.Errors)/float64(t.Requests)
 		}
-		if split.ProbBest[a.ID] > leaderProb {
-			leader, leaderProb = a.ID, split.ProbBest[a.ID]
-		}
 		arms = append(arms, map[string]any{
 			"id": a.ID, "provider_id": a.ProviderID, "provider_name": p.Name, "provider_type": p.Type, "provider_enabled": p.Enabled, "model": a.Model, "label": p.Slug + "/" + a.Model,
 			"share": split.Shares[a.ID], "learned_share": split.Learned[a.ID], "prob_best": split.ProbBest[a.ID],
@@ -185,8 +183,23 @@ func (s *Server) feedbackStats(w http.ResponseWriter, r *http.Request) {
 		"loop": l, "arms": arms, "history": s.Gateway.SplitHistory(l, votes, 40), "recent": recent,
 		"votes": len(votes), "counted_votes": counted, "uncertain_votes": uncertain, "human_votes": human, "jev_votes": jev,
 		"served": served, "coverage": ratio(len(votes), served),
-		"leader": map[string]any{"arm_id": leader, "prob_best": leaderProb, "conclusive": leaderProb >= 0.95 && counted >= 30},
+		"leader": lead, "judging": s.Store.JudgeQueue(r.Context(), l.ID),
 	})
+}
+
+// retryJudging puts the loop's failed Jev ratings back on the queue.
+func (s *Server) retryJudging(w http.ResponseWriter, r *http.Request) {
+	l, err := s.Store.FeedbackLoop(chi.URLParam(r, "id"))
+	if err != nil {
+		writeError(w, 404, "Feedback loop not found.")
+		return
+	}
+	n, err := s.Store.RetryFailedJudges(r.Context(), l.ID)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]any{"requeued": n})
 }
 
 func ratio(a, b int) float64 {
@@ -254,5 +267,6 @@ func (s *Server) vote(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, err.Error())
 		return
 	}
+	s.Gateway.AfterVote(l.ID)
 	writeJSON(w, 200, v)
 }
