@@ -72,7 +72,8 @@ This prints the replacement once, immediately invalidates the previous master ke
 ## Supported API
 
 - `POST /v1/chat/completions` — OpenAI-compatible chat completions, including streaming (authenticate with the master key or a per-app API key)
-- `GET /v1/models` — model catalog aggregated in parallel from enabled providers and cached for five minutes
+- `GET /v1/models` — model catalog aggregated in parallel from enabled providers and cached for five minutes, plus every `feedback/<slug>` loop
+- `POST /v1/feedback` — rate a feedback-loop answer: `{"trace_id": "…", "rating": "up" | "down" | "none"}` (the trace id comes from the `X-Nexa-Trace-Id` response header)
 - `GET /healthz` — container health
 - Dashboard APIs under `/api/*` use an HTTP-only session cookie
 
@@ -90,6 +91,15 @@ Smart routing selects between Light, Medium, and Heavy model lanes. Lanes can de
 
 An attempt stays private until its provider answers `2xx`; from then on the response streams straight to the client, so smart routes keep both failover and real streaming. The per-profile timeout only covers the wait for a provider to start answering — a long generation already in progress is never cut off. Responses include `X-Nexa-Routed-Model`, `X-Nexa-Routing-Lane`, and `X-Nexa-Routing-Confidence`. The **Try a prompt** panel previews the decision for any prompt.
 
+## Feedback loops
+
+A feedback loop puts two to four models behind one model name, `feedback/<slug>`, and lets ratings decide which of them gets the traffic. Create one under **Feedback Loops** and choose who rates:
+
+- **People** — thumbs up or down under each Playground answer (the model stays hidden until you vote, so ratings are blind), or from your application through `POST /v1/feedback`.
+- **Jev judge** — Jev reads the question and the answer in the background and rates it; set the share of answers it rates. Verdicts below 60% confidence are recorded as unsure and not counted.
+
+Traffic starts evenly split. Each model's like rate is modelled as Beta(1 + likes, 1 + dislikes) and the split follows each model's chance of being the best one (Thompson sampling), so a model rated better gets more traffic without ever being starved: every model keeps the minimum share you set, and only each model's latest ratings (the learning window) count, so the loop follows changes in quality. If the drawn model fails, the next models are tried in order of share. **Pause** freezes the split while ratings keep arriving; **Reset ratings** returns to an even split. The loop page shows the live split, how it moved over time, per-model share, chance of being best, likes and dislikes, like rate with its 90% range, requests, errors, latency, cost and cost per like, coverage, recent ratings, and says when a leader is ready to conclude (95% chance of being best after at least 30 ratings). Responses include `X-Nexa-Feedback-Loop`, `X-Nexa-Feedback-Arm`, `X-Nexa-Feedback-Mode` and `X-Nexa-Routed-Model`.
+
 ## Dashboard
 
 The dashboard is compiled into the binary and makes no external requests — the Inter font (SIL OFL 1.1, `web/fonts`) and every icon are bundled, so it works under the strict Content-Security-Policy and offline.
@@ -97,8 +107,9 @@ The dashboard is compiled into the binary and makes no external requests — the
 - **Overview** — a live gateway status card (provider health verified on start-up and every 10 minutes, share of failed requests), metrics with change against the previous period and trend lines, a request chart with errors stacked on top, breakdowns by provider and model, the slowest models by p95, and recent traces refreshed every 5 seconds.
 - **Providers** — provider marks, key verification on save, per-provider requests, error rate and p95 over 24 hours, a searchable pricing table that lists the models you use first, and secondary actions behind a menu.
 - **Smart routing** — a live decision preview for any prompt and, per profile, the Light → Medium → Heavy lanes with their 7-day share of traffic.
+- **Feedback loops** — the live split, split over time, a per-model scoreboard, recent ratings that open their traces, and pause / resume / reset.
 - **Traces** — filters and paging; details open in a side panel with the request timeline (gateway work, Jev decision, attempts, first token) and step through the list with ↑ / ↓.
-- **Playground** — streaming with stop, time / tokens / cost under every reply, side-by-side comparison of two routes, and JSON mode that adds the instruction OpenAI and Groq require.
+- **Playground** — blind thumbs up / down on feedback-loop answers (and Jev's verdict as it arrives), streaming with stop, time / tokens / cost under every reply, side-by-side comparison of two routes, and JSON mode that adds the instruction OpenAI and Groq require.
 - **Access** — dashboard users with roles, per-app API keys, and search once lists grow.
 
 Provider marks come from Simple Icons (CC0) for OpenAI, Anthropic and Google Gemini and Lobe Icons (MIT) for Groq, and are used only to identify connected providers.

@@ -1,6 +1,6 @@
 const $ = (q, root = document) => root.querySelector(q);
 const $$ = (q, root = document) => [...root.querySelectorAll(q)];
-const state = { user: null, providers: [], routingProfiles: [], routingTargets: [], routingModels: {}, traces: [], traceTotal: 0, status: 'all', conversation: [], code: 'python', chartRange: '24h', chartFrom: '', chartTo: '', selectedTrace: null, traceView: 'readable', traceRequest: 0, abort: null, poll: null, headersDirty: false, recentTraces: [], traceList: [], users: [], apiKeys: [], prices: [], priceExpanded: false, stats: null, providerStats: {}, routingStats: null };
+const state = { user: null, providers: [], routingProfiles: [], routingTargets: [], routingModels: {}, traces: [], traceTotal: 0, status: 'all', conversation: [], code: 'python', chartRange: '24h', chartFrom: '', chartTo: '', selectedTrace: null, traceView: 'readable', traceRequest: 0, abort: null, poll: null, headersDirty: false, recentTraces: [], traceList: [], users: [], apiKeys: [], prices: [], priceExpanded: false, stats: null, providerStats: {}, routingStats: null, feedbackLoops: [], feedbackSelected: '', feedbackStats: null, loopArms: [], armModels: {} };
 
 const api = async (path, options = {}) => {
   const response = await fetch(path, { credentials: 'same-origin', headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }, ...options });
@@ -41,7 +41,8 @@ const fmtCost = n => n > 0 ? `$${n < .01 ? n.toFixed(6) : n.toFixed(3)}` : '—'
 const initials = name => (name || 'N').split(/\s+/).map(x => x[0]).join('').slice(0, 2).toUpperCase();
 const toast = (message, type = '') => { const el = document.createElement('div'); el.className = `toast ${type}`; el.textContent = message; $('#toast-stack').append(el); setTimeout(() => el.remove(), 4500); };
 // Inline style attributes are blocked by the CSP, so percentage bars carry data-width and get it applied here.
-const applyWidths = root => $$('[data-width]', root).forEach(el => { el.style.width = `${Math.min(100, Math.max(0, Number(el.dataset.width) || 0))}%`; });
+const clampPct = value => `${Math.min(100, Math.max(0, Number(value) || 0))}%`;
+const applyWidths = root => $$('[data-width],[data-left]', root).forEach(el => { if ('width' in el.dataset) el.style.width = clampPct(el.dataset.width); if ('left' in el.dataset) el.style.left = clampPct(el.dataset.left); });
 const setError = (id, message = '') => { const el = $(id); el.textContent = message; el.classList.toggle('hidden', !message); };
 const isAdmin = () => !!(state.user && (state.user.master || state.user.role === 'admin'));
 const store = { get(key, fallback) { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } }, set(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} } };
@@ -96,6 +97,10 @@ function bindEvents() {
   $('#price-search').addEventListener('input', renderPrices); $('#price-expand').addEventListener('click', () => { state.priceExpanded = !state.priceExpanded; renderPrices(); });
   $('#routing-form').addEventListener('submit', saveRoutingProfile); $('#new-routing-profile').addEventListener('click', () => openRoutingProfile()); $('#add-routing-target').addEventListener('click', () => addRoutingTarget());
   $('#route-preview-form').addEventListener('submit', previewRoute);
+  $('#new-feedback-loop').addEventListener('click', () => openFeedbackLoop()); $('#loop-form').addEventListener('submit', saveFeedbackLoop);
+  $('#add-loop-arm').addEventListener('click', () => { if (state.loopArms.length < 4) { state.loopArms.push({ provider_id: state.providers.find(p => p.enabled)?.id || '', model: '' }); renderLoopArms(); } });
+  $('#loop-name').addEventListener('input', () => { if (!$('#loop-id').value) $('#loop-slug').value = slugify($('#loop-name').value); });
+  $$('input[name=loop-mode]').forEach(x => x.addEventListener('change', updateLoopMode));
   $('#routing-name').addEventListener('input', () => { if (!$('#routing-id').value) $('#routing-slug').value = slugify($('#routing-name').value); });
   $$('input[name=provider-type]').forEach(x => x.addEventListener('change', providerTypeChanged));
   $('#provider-name').addEventListener('input', () => { if (!$('#provider-id').value) $('#provider-slug').value = slugify($('#provider-name').value); });
@@ -146,6 +151,11 @@ function bindEvents() {
     const activateRoute = e.target.closest('[data-activate-routing]'); if (activateRoute) activateRoutingProfile(activateRoute.dataset.activateRouting);
     const checkRoute = e.target.closest('[data-check-routing]'); if (checkRoute) checkRoutingProfile(checkRoute.dataset.checkRouting, checkRoute);
     const deleteRoute = e.target.closest('[data-delete-routing]'); if (deleteRoute) deleteRoutingProfile(deleteRoute.dataset.deleteRouting);
+    const loopAction = e.target.closest('[data-loop-action]'); if (loopAction) feedbackAction(loopAction.dataset.loopAction);
+    const selectLoop = e.target.closest('[data-select-loop]'); if (selectLoop) { state.feedbackSelected = selectLoop.dataset.selectLoop; renderLoopTabs(); loadFeedbackStats(); }
+    if (e.target.closest('[data-new-loop]')) openFeedbackLoop();
+    const removeArm = e.target.closest('[data-remove-arm]'); if (removeArm && state.loopArms.length > 2) { state.loopArms.splice(Number(removeArm.dataset.removeArm), 1); renderLoopArms(); }
+    const vote = e.target.closest('[data-vote]'); if (vote && !vote.closest('.busy')) voteOnAnswer(vote);
     const removeTarget = e.target.closest('[data-remove-target]'); if (removeTarget) { state.routingTargets.splice(Number(removeTarget.dataset.removeTarget), 1); renderRoutingTargets(); }
   });
   document.addEventListener('keydown', e => { if ($('#trace-dialog').open && !e.target.matches?.('input,textarea,select')) { if (['ArrowLeft', 'ArrowUp'].includes(e.key)) { e.preventDefault(); stepTrace(-1); } if (['ArrowRight', 'ArrowDown'].includes(e.key)) { e.preventDefault(); stepTrace(1); } } if (e.key === 'Enter' && e.target.matches?.('tr[data-trace-id]')) openTrace(e.target.dataset.traceId, e.target.closest('#recent-traces') ? state.recentTraces : state.traces); });
@@ -171,10 +181,11 @@ function showApp() {
 }
 
 function route() {
-  if (!state.user) return; const name = (location.hash || '#overview').slice(1); const valid = ['overview', 'providers', 'routing', 'traces', 'playground', 'team']; const current = valid.includes(name) ? name : 'overview';
+  if (!state.user) return; const name = (location.hash || '#overview').slice(1); const valid = ['overview', 'providers', 'routing', 'feedback', 'traces', 'playground', 'team']; const current = valid.includes(name) ? name : 'overview';
   $$('.page').forEach(x => x.classList.toggle('active', x.id === `page-${current}`)); $$('[data-route]').forEach(x => x.classList.toggle('active', x.dataset.route === current)); $('#page-crumb').textContent = current.toUpperCase();
   clearInterval(state.poll);
   if (current === 'overview') state.poll = setInterval(() => { if (!document.hidden) { loadStats(); loadRecent(); loadProviders(false); } }, 5000);
+  if (current === 'feedback') state.poll = setInterval(() => { if (!document.hidden && !$('#loop-dialog').open) loadFeedbackLoops(); }, 5000);
   loadRoute();
 }
 function loadRoute(force = false) {
@@ -182,8 +193,9 @@ function loadRoute(force = false) {
   if (current === 'overview') { loadStats(); loadRecent(); loadProviders(false); }
   if (current === 'providers') { loadProviders(); loadPrices(); }
   if (current === 'routing') { loadProviders(false); loadRoutingStats(); loadRoutingProfiles(); }
+  if (current === 'feedback') { loadProviders(false); loadFeedbackLoops(); }
   if (current === 'traces') { loadProviders(false); loadTraces(); }
-  if (current === 'playground') { loadProviders(false, true); loadRoutingProfiles(false); }
+  if (current === 'playground') { loadProviders(false, true); loadRoutingProfiles(false); loadFeedbackLoops(false); }
   if (current === 'team') { loadUsers(); loadApiKeys(); }
   if (force) toast('Dashboard refreshed');
 }
@@ -300,7 +312,7 @@ async function toggleProvider(id) {
   try { const updated = await api(`/api/providers/${id}`, { method: 'PUT', body: JSON.stringify({ name: p.name, slug: p.slug, type: p.type, base_url: p.base_url, enabled: !p.enabled }) }); providerCheckToast(updated, updated.enabled ? 'resumed' : 'paused'); loadProviders(); }
   catch (e) { toast(e.message, 'error'); }
 }
-async function deleteProvider(id) { const p = state.providers.find(x => x.id === id); if (!await confirmAction(`Remove ${p?.name || 'this provider'}?`, 'Existing traces remain. Providers used by a smart routing profile must be removed from it first.', 'Remove')) return; try { await api(`/api/providers/${id}`, { method: 'DELETE' }); toast('Provider removed'); loadProviders(); } catch (e) { toast(e.message, 'error'); } }
+async function deleteProvider(id) { const p = state.providers.find(x => x.id === id); if (!await confirmAction(`Remove ${p?.name || 'this provider'}?`, 'Existing traces remain. Providers used by a smart routing profile or feedback loop must be removed from it first.', 'Remove')) return; try { await api(`/api/providers/${id}`, { method: 'DELETE' }); toast('Provider removed'); loadProviders(); } catch (e) { toast(e.message, 'error'); } }
 
 async function loadPrices() {
   try {
@@ -406,6 +418,155 @@ async function previewRoute(e) {
   } catch (err) { out.innerHTML = `<p class="form-error">${esc(err.message)}</p>`; }
 }
 
+// Feedback loops: feedback/<slug> splits traffic across 2–4 models; the server moves the split with Thompson sampling.
+const pct = (value, digits = 0) => `${(Number(value || 0) * 100).toFixed(digits)}%`;
+const voteNumber = value => Number.isInteger(value) ? String(value) : Number(value || 0).toFixed(1);
+async function loadFeedbackLoops(render = true) {
+  try {
+    state.feedbackLoops = await api('/api/feedback/loops');
+    if ($('#page-playground').classList.contains('active')) renderProviderSelect();
+    if (!render || !$('#page-feedback').classList.contains('active')) return;
+    if (!state.feedbackLoops.some(l => l.id === state.feedbackSelected)) state.feedbackSelected = state.feedbackLoops[0]?.id || '';
+    renderLoopTabs(); await loadFeedbackStats();
+  } catch (e) { toast(e.message, 'error'); }
+}
+function renderLoopTabs() {
+  $('#loop-tabs').classList.toggle('hidden', state.feedbackLoops.length < 2);
+  $('#loop-tabs').innerHTML = state.feedbackLoops.map(l => `<button type="button" role="tab" aria-selected="${l.id === state.feedbackSelected}" data-select-loop="${esc(l.id)}"><i class="${esc(l.status)}"></i><b>${esc(l.name)}</b><small>${l.mode === 'jev' ? 'JEV' : 'PEOPLE'} · ${l.arms.length} MODELS</small></button>`).join('');
+}
+async function loadFeedbackStats() {
+  const id = state.feedbackSelected;
+  if (!id) { state.feedbackStats = null; renderLoopDetail(); return; }
+  try { const stats = await api(`/api/feedback/loops/${id}/stats`); if (id !== state.feedbackSelected) return; state.feedbackStats = stats; renderLoopDetail(); markFresh('#feedback-freshness'); }
+  catch (e) { toast(e.message, 'error'); }
+}
+function renderLoopDetail() {
+  const root = $('#loop-detail'), x = state.feedbackStats;
+  if (!state.feedbackLoops.length) { root.innerHTML = `<div class="routing-empty loop-empty"><span class="panel-kicker">NO FEEDBACK LOOPS YET</span><h2>Let ratings pick your model.</h2><p>Put two to four models behind one model name. Nexa starts with an even split, then sends more traffic to the models that people — or Jev — rate best.</p>${isAdmin() ? `<button class="primary-action compact" type="button" data-new-loop><span>Create first loop</span>${uiIcon('plus')}</button>` : ''}</div>`; return; }
+  if (!x) return;
+  const l = x.loop, arms = x.arms, jev = l.mode === 'jev', paused = l.status === 'paused', leader = arms.find(a => a.id === x.leader.arm_id);
+  const armIndex = id => arms.findIndex(a => a.id === id), label = id => arms.find(a => a.id === id)?.label || 'Removed model';
+  let verdict;
+  if (!x.counted_votes) verdict = `<span class="loop-chip">EVEN SPLIT</span><strong>Waiting for ratings</strong><p>${jev ? `Jev rates answers as traffic arrives. Send requests to feedback/${esc(l.slug)}.` : 'Rate answers in the Playground or from your app — every rating moves the split.'}</p>`;
+  else verdict = `<span class="loop-chip ${x.leader.conclusive ? 'ready' : ''}">${x.leader.conclusive ? 'READY TO CONCLUDE' : 'STILL LEARNING'}</span><strong><i class="arm-swatch arm-${armIndex(leader.id)}"></i>${esc(leader.label)}</strong><p>${pct(x.leader.prob_best)} chance it is the best model${x.leader.conclusive ? '. You can send all traffic to it.' : ` after ${fmtNum(x.counted_votes)} ratings.`}</p>`;
+  if (jev && !l.jev_key_configured) verdict += `<p class="loop-paused-note loop-warning">No Jev key — answers are not being rated. Add one under Edit, or set JEV_API_KEY.</p>`;
+  if (paused) verdict += `<p class="loop-paused-note">Paused — the split is frozen.${jev ? ' Jev is not rating.' : ' Ratings are still recorded.'}</p>`;
+  const segments = arms.map((a, i) => `<span class="arm-${i}" data-width="${a.share * 100}" title="${esc(a.label)} · ${pct(a.share, 1)}">${a.share >= .09 ? `<b>${pct(a.share)}</b>` : ''}</span>`).join('');
+  const legend = arms.map((a, i) => `<li><i class="arm-swatch arm-${i}"></i><span title="${esc(a.label)}">${esc(a.label)}</span><b>${pct(a.share)}</b>${paused && Math.abs(a.learned_share - a.share) > .005 ? `<small>learned ${pct(a.learned_share)}</small>` : ''}</li>`).join('');
+  const actions = `<div class="loop-actions" data-admin><button type="button" data-loop-action="${paused ? 'resume' : 'pause'}">${uiIcon(paused ? 'play' : 'pause')}${paused ? 'Resume' : 'Pause'}</button><button type="button" data-loop-action="edit">Edit</button><button type="button" data-loop-action="reset">Reset ratings</button><button type="button" class="danger" data-loop-action="delete">${uiIcon('trash')}Delete</button></div>`;
+  const hero = `<article class="loop-hero ${paused ? 'paused' : ''}"><div class="loop-summary"><span class="status-beacon"><i></i></span><div><span class="status-kicker">${jev ? 'JEV JUDGES' : 'PEOPLE RATE'} · ${paused ? 'PAUSED' : 'LEARNING'}</span><h2>${esc(l.name)}</h2><button type="button" class="loop-model" data-copy="feedback/${esc(l.slug)}" title="Copy model name">feedback/${esc(l.slug)}${uiIcon('copy')}</button></div></div><div class="loop-split"><span class="status-kicker">LIVE TRAFFIC SPLIT</span><div class="split-bar">${segments}</div><ul class="split-legend">${legend}</ul></div><div class="loop-verdict">${verdict}</div>${actions}</article>`;
+  const cell = (name, value, note) => `<div><span>${name}</span><b>${value}</b><small>${note}</small></div>`;
+  const stats = `<div class="loop-stats">${cell('REQUESTS SERVED', fmtNum(x.served), 'through this loop')}${cell('RATINGS COUNTED', fmtNum(x.counted_votes), x.uncertain_votes ? `${fmtNum(x.uncertain_votes)} unsure · not counted` : jev ? 'from Jev' : 'from people')}${cell('COVERAGE', pct(x.coverage), 'of served answers rated')}${cell('CONFIGURATION', `${pct(l.min_share)} min`, `last ${fmtNum(l.window)} ratings per model`)}</div>`;
+  const rows = arms.map((a, i) => { const rated = a.up + a.down, [low, high] = a.interval || [0, 1]; return `<tr><td><div class="arm-cell"><i class="arm-swatch arm-${i}"></i><span class="provider-mini">${providerMark(a.provider_type)}</span><b title="${esc(a.label)}">${esc(a.label)}</b>${a.id === leader?.id && x.counted_votes ? '<small class="leader-tag">LEADER</small>' : ''}${a.provider_enabled ? '' : '<small class="source-tag">PROVIDER PAUSED</small>'}</div></td><td><b>${pct(a.share)}</b></td><td>${pct(a.prob_best)}</td><td><span class="vote-count up">${uiIcon('thumb-up')}${voteNumber(a.up)}</span><span class="vote-count down">${uiIcon('thumb-down')}${voteNumber(a.down)}</span></td><td><div class="like-rate"><b>${rated ? pct(a.like_rate) : '—'}</b><span class="like-range" title="90% range: ${pct(low)}–${pct(high)}"><i data-left="${low * 100}" data-width="${(high - low) * 100}"></i>${rated ? `<em data-left="${a.like_rate * 100}"></em>` : ''}</span><small>${pct(low)}–${pct(high)}</small></div></td><td>${fmtNum(a.requests)}</td><td class="${a.errors ? 'loop-errors' : ''}">${a.requests ? pct(a.error_rate, 1) : '—'}</td><td>${a.requests ? `${durationLabel(a.avg_latency_ms)} · ${durationLabel(a.p95_latency_ms)}` : '—'}</td><td>${fmtCost(a.avg_cost)}</td><td>${fmtCost(a.cost_per_like)}</td></tr>`; }).join('');
+  const board = `<article class="panel loop-board"><header class="panel-head"><div><span class="panel-kicker">WINDOW: LAST ${fmtNum(l.window)} RATINGS PER MODEL</span><h2>Model scoreboard</h2></div><span class="panel-note">Like rate shows the likely range (90%) — it narrows as ratings arrive</span></header><div class="table-wrap"><table><thead><tr><th>MODEL</th><th>SHARE</th><th>CHANCE BEST</th><th>RATINGS</th><th>LIKE RATE</th><th>REQUESTS</th><th>ERRORS</th><th>LATENCY AVG · P95</th><th>AVG COST</th><th>COST / LIKE</th></tr></thead><tbody>${rows}</tbody></table></div></article>`;
+  const chart = `<article class="panel loop-history-panel"><header class="panel-head"><div><span class="panel-kicker">SPLIT OVER TIME</span><h2>How traffic moved</h2></div><div class="legend">${arms.map((a, i) => `<span><i class="arm-swatch arm-${i}"></i>${esc(a.model)}</span>`).join('')}</div></header>${loopHistoryChart(x.history, arms)}</article>`;
+  const recent = `<article class="panel loop-recent"><header class="panel-head"><div><span class="panel-kicker">LATEST FIRST</span><h2>Recent ratings</h2></div></header><div class="rating-list">${(x.recent || []).map(v => `<button type="button" class="rating-row" data-trace-id="${esc(v.trace_id)}"><span class="rating-verdict ${esc(v.verdict)}">${v.verdict === 'uncertain' ? '?' : uiIcon(v.verdict === 'liked' ? 'thumb-up' : 'thumb-down')}</span><span class="rating-copy"><b>${esc(v.question || 'No prompt captured')}</b><small><i class="arm-swatch arm-${armIndex(v.arm_id)}"></i>${esc(label(v.arm_id))} · ${v.source === 'jev' ? `JEV ${pct(v.confidence)}` : 'PERSON'} · ${esc(ago(v.created_at))}</small></span></button>`).join('') || `<p class="breakdown-empty">${jev ? 'Jev has not rated an answer yet.' : 'No ratings yet — try the Playground.'}</p>`}</div></article>`;
+  const snippet = jev ? `response = client.chat.completions.create(\n    model="feedback/${l.slug}",\n    messages=[{"role": "user", "content": "Hello"}],\n)\n# Jev rates the answer in the background — nothing else to send.` : `raw = client.chat.completions.with_raw_response.create(\n    model="feedback/${l.slug}",\n    messages=[{"role": "user", "content": "Hello"}],\n)\nanswer = raw.parse().choices[0].message.content\ntrace_id = raw.headers["x-nexa-trace-id"]\n\n# when your user clicks thumbs up or down (rating: up | down | none)\nhttpx.post("${location.origin}/v1/feedback",\n    headers={"Authorization": "Bearer YOUR_NEXA_API_KEY"},\n    json={"trace_id": trace_id, "rating": "up"})`;
+  const integrate = `<article class="panel loop-integrate"><header class="panel-head"><div><span class="panel-kicker">USE IT FROM YOUR APP</span><h2>${jev ? 'Call the loop' : 'Call, then rate'}</h2></div></header><div class="markdown-body">${renderMarkdown('```python\n' + snippet + '\n```')}</div></article>`;
+  root.innerHTML = `${hero}${stats}${chart}${board}<div class="loop-lower">${recent}${integrate}</div>`;
+  applyWidths(root);
+}
+function loopHistoryChart(history, arms) {
+  const start = history?.[0] || { votes: 0, shares: Object.fromEntries(arms.map(a => [a.id, 1 / arms.length])) }, points = history?.length > 1 ? history : [start, start];
+  const w = 960, h = 220, left = 46, right = 14, top = 12, bottom = 30, plotW = w - left - right, plotH = h - top - bottom;
+  const x = i => left + i / (points.length - 1) * plotW, y = v => top + (1 - v) * plotH;
+  let lower = points.map(() => 0);
+  const bands = arms.map((a, k) => { const upper = points.map((p, i) => lower[i] + Number(p.shares?.[a.id] || 0)); const outline = [...upper.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`), ...lower.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).reverse()].join(' '); lower = upper; return `<polygon class="arm-fill arm-${k}" points="${outline}"><title>${esc(a.label)}</title></polygon>`; }).join('');
+  const grid = [0, .5, 1].map(v => `<line x1="${left}" x2="${w - right}" y1="${y(v)}" y2="${y(v)}"/><text x="${left - 8}" y="${y(v) + 4}" text-anchor="end">${v * 100}%</text>`).join('');
+  const last = points.at(-1).votes || 0;
+  return `<div class="loop-history"><svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Traffic share of each model as ratings arrived">${bands}<g class="chart-grid">${grid}</g><text class="chart-x-label" x="${left}" y="${h - 8}">Start · even split</text><text class="chart-x-label" x="${w - right}" y="${h - 8}" text-anchor="end">${last ? `${fmtNum(last)} ratings` : 'No ratings yet'}</text></svg></div>`;
+}
+async function feedbackAction(action) {
+  const l = state.feedbackStats?.loop; if (!l) return;
+  if (action === 'edit') { openFeedbackLoop(l.id); return; }
+  if (action === 'reset' && !await confirmAction(`Reset ratings for ${l.name}?`, 'Every rating in this loop is deleted and traffic returns to an even split. Traces are kept.', 'Reset')) return;
+  if (action === 'delete' && !await confirmAction(`Delete ${l.name}?`, `Applications calling feedback/${l.slug} will fail. Its ratings are deleted; traces are kept.`, 'Delete')) return;
+  const done = { pause: 'Loop paused · split frozen', resume: 'Loop resumed', reset: 'Ratings cleared · split is even again', delete: 'Feedback loop deleted' }[action];
+  try { await api(`/api/feedback/loops/${l.id}${action === 'delete' ? '' : `/${action}`}`, action === 'delete' ? { method: 'DELETE' } : { method: 'POST', body: '{}' }); toast(done); loadFeedbackLoops(); }
+  catch (e) { toast(e.message, 'error'); }
+}
+function openFeedbackLoop(id = '') {
+  const l = state.feedbackLoops.find(x => x.id === id), enabled = state.providers.filter(p => p.enabled);
+  $('#loop-form').reset(); $('#loop-id').value = l?.id || ''; $('#loop-dialog-title').textContent = l ? 'Edit feedback loop' : 'Create feedback loop';
+  $('#loop-name').value = l?.name || ''; $('#loop-slug').value = l?.slug || ''; $(`input[name=loop-mode][value="${l?.mode || 'human'}"]`).checked = true;
+  $('#loop-jev-key').value = ''; $('#loop-jev-status').textContent = l?.jev_key_configured ? 'KEY READY' : '';
+  $('#loop-jev-sample').value = Math.round((l?.jev_sample ?? 1) * 100); $('#loop-min-share').value = Math.round((l?.min_share ?? .1) * 100); $('#loop-window').value = l?.window || 200;
+  state.loopArms = structuredClone(l?.arms || [0, 1].map(i => ({ provider_id: enabled[Math.min(i, enabled.length - 1)]?.id || '', model: '' })));
+  updateLoopMode(); renderLoopArms(); setError('#loop-error'); $('#loop-dialog').showModal();
+}
+function updateLoopMode() { $('#loop-jev-fields').classList.toggle('hidden', $('input[name=loop-mode]:checked').value !== 'jev'); }
+// Model lists are cached as promises so rows loading together see each other's picks.
+const armModelNames = (providerID, force = false) => { if (force || !state.armModels[providerID]) state.armModels[providerID] = api(`/api/providers/${providerID}/models?capability=chat`).then(list => [...new Set(list.map(x => x.id || x.name).filter(Boolean))].sort()).catch(e => { delete state.armModels[providerID]; throw e; }); return state.armModels[providerID]; };
+function renderLoopArms() {
+  const options = selected => state.providers.filter(p => p.enabled || p.id === selected).map(p => `<option value="${esc(p.id)}" ${p.id === selected ? 'selected' : ''}>${esc(p.name)} · ${esc(p.slug)}${p.enabled ? '' : ' · PAUSED'}</option>`).join('') || '<option value="">Add a provider first</option>';
+  $('#loop-arms').innerHTML = state.loopArms.map((a, i) => `<div class="arm-editor" data-arm-index="${i}"><span class="arm-swatch arm-${i}"></span><label><span>PROVIDER</span><select data-arm-field="provider_id">${options(a.provider_id)}</select></label><label><span>MODEL <b data-model-count></b></span><select data-arm-field="model" required><option value="${esc(a.model)}">${a.model ? esc(a.model) : 'Loading live models…'}</option></select></label><button type="button" data-remove-arm="${i}" title="Remove model" aria-label="Remove model" ${state.loopArms.length <= 2 ? 'disabled' : ''}>${uiIcon('trash')}</button></div>`).join('');
+  $('#add-loop-arm').disabled = state.loopArms.length >= 4;
+  $$('.arm-editor', $('#loop-arms')).forEach((row, index) => {
+    const arm = state.loopArms[index], provider = $('[data-arm-field=provider_id]', row), model = $('[data-arm-field=model]', row);
+    if (!arm.provider_id) arm.provider_id = provider.value;
+    provider.addEventListener('change', () => { arm.provider_id = provider.value; arm.model = ''; loadArmModels(index); });
+    model.addEventListener('change', () => { arm.model = model.value; });
+    loadArmModels(index);
+  });
+}
+async function loadArmModels(index) {
+  const arm = state.loopArms[index], row = $(`[data-arm-index="${index}"]`, $('#loop-arms')); if (!arm || !row) return;
+  const select = $('[data-arm-field=model]', row), count = $('[data-model-count]', row), providerID = arm.provider_id;
+  if (!providerID) { select.innerHTML = '<option value="">Choose a provider first</option>'; return; }
+  select.disabled = true;
+  try {
+    const names = await armModelNames(providerID); if (state.loopArms[index] !== arm || arm.provider_id !== providerID) return;
+    const saved = arm.model && !names.includes(arm.model) ? [arm.model] : [];
+    if (!arm.model) { const taken = state.loopArms.filter(x => x !== arm && x.provider_id === providerID).map(x => x.model); arm.model = names.find(n => !taken.includes(n)) || names[0] || ''; }
+    select.innerHTML = [...saved, ...names].map(n => `<option value="${esc(n)}">${esc(n)}${saved.includes(n) ? ' · SAVED' : ''}</option>`).join('') || '<option value="">No chat models returned</option>';
+    select.value = arm.model; count.textContent = `${names.length} LIVE`; select.disabled = false;
+  } catch (e) { select.innerHTML = '<option value="">Could not load models</option>'; count.textContent = 'ERROR'; toast(e.message, 'error'); }
+}
+async function saveFeedbackLoop(e) {
+  e.preventDefault(); const id = $('#loop-id').value;
+  if (state.loopArms.some(a => !a.provider_id || !a.model)) { setError('#loop-error', 'Choose a live model for every row.'); return; }
+  const body = { name: $('#loop-name').value, slug: $('#loop-slug').value, mode: $('input[name=loop-mode]:checked').value, jev_api_key: $('#loop-jev-key').value, jev_sample: Number($('#loop-jev-sample').value) / 100, min_share: Number($('#loop-min-share').value) / 100, window: Number($('#loop-window').value), arms: state.loopArms.map(a => ({ id: a.id, provider_id: a.provider_id, model: a.model })) };
+  const button = $('#loop-form [type=submit]'); button.disabled = true;
+  try { const saved = await api(id ? `/api/feedback/loops/${id}` : '/api/feedback/loops', { method: id ? 'PUT' : 'POST', body: JSON.stringify(body) }); $('#loop-dialog').close(); toast(id ? 'Feedback loop updated' : `feedback/${saved.slug} is live · traffic starts evenly split`); state.feedbackSelected = saved.id; loadFeedbackLoops(); }
+  catch (err) { setError('#loop-error', err.message); }
+  finally { button.disabled = false; }
+}
+// Playground rating: people rate blind — the model is revealed once they vote.
+function addFeedbackControl(item, traceID, headers) {
+  const mode = headers.get('X-Nexa-Feedback-Mode'), routed = headers.get('X-Nexa-Routed-Model') || '', box = document.createElement('div');
+  box.className = 'message-feedback'; box.dataset.feedbackTrace = traceID; box.dataset.route = routed;
+  if (mode === 'human') box.innerHTML = `<span class="feedback-prompt">Rate this answer · the model is revealed after you vote</span><button type="button" data-vote="up" aria-pressed="false" aria-label="Good answer" title="Good answer">${uiIcon('thumb-up')}</button><button type="button" data-vote="down" aria-pressed="false" aria-label="Bad answer" title="Bad answer">${uiIcon('thumb-down')}</button>`;
+  else { box.classList.add('judging'); box.innerHTML = `<span class="feedback-prompt"><i class="judge-dot"></i>Jev is rating this answer from ${esc(routed)}…</span>`; }
+  item.append(box); // attach before watching: the watcher stops once its box leaves the page
+  if (mode !== 'human') watchJevVerdict(box, traceID);
+}
+async function voteOnAnswer(button) {
+  const box = button.closest('.message-feedback'), rating = button.dataset.vote === box.dataset.rating ? 'none' : button.dataset.vote;
+  box.classList.add('busy');
+  try {
+    await api('/api/feedback/votes', { method: 'POST', body: JSON.stringify({ trace_id: box.dataset.feedbackTrace, rating }) });
+    box.dataset.rating = rating === 'none' ? '' : rating; $$('[data-vote]', box).forEach(b => b.setAttribute('aria-pressed', String(b.dataset.vote === box.dataset.rating)));
+    $('.feedback-prompt', box).textContent = rating === 'none' ? `Rating removed · answered by ${box.dataset.route}` : `Thanks — answered by ${box.dataset.route}`;
+  } catch (e) { toast(e.message, 'error'); }
+  finally { box.classList.remove('busy'); }
+}
+async function watchJevVerdict(box, traceID) {
+  for (let i = 0; i < 16 && box.isConnected; i++) {
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    const vote = (await api(`/api/traces/${traceID}`).catch(() => null))?.feedback; if (!vote) continue;
+    box.classList.remove('judging'); box.classList.add(vote.verdict);
+    $('.feedback-prompt', box).innerHTML = `${vote.verdict === 'uncertain' ? '' : uiIcon(vote.verdict === 'liked' ? 'thumb-up' : 'thumb-down')}${vote.verdict === 'liked' ? 'Jev liked' : vote.verdict === 'disliked' ? 'Jev disliked' : 'Jev was unsure about'} this answer from ${esc(box.dataset.route)} · ${pct(vote.confidence)} sure${vote.verdict === 'uncertain' ? ' — not counted' : ''}`;
+    return;
+  }
+  box.classList.remove('judging'); $('.feedback-prompt', box).textContent = `Jev did not rate this answer from ${box.dataset.route} (outside the sampling rate, or Jev was unavailable)`;
+}
+function traceFeedbackDetail(t) {
+  const m = parseJSON(t.metadata); if (!m?.feedback_loop) return '';
+  const attempts = m.attempts || [], sampled = attempts.find(a => a.target_id === m.sampled_arm)?.route || 'a model', served = attempts.find(a => a.target_id === m.arm_id && a.status_code >= 200 && a.status_code < 300)?.route, v = t.feedback;
+  const verdict = !v ? (m.served ? 'NOT RATED' : 'NOT SERVED') : v.verdict === 'uncertain' ? `JEV UNSURE · ${pct(v.confidence)}` : `${v.source === 'jev' ? `JEV · ${pct(v.confidence)}` : 'PERSON'} · ${v.verdict.toUpperCase()}`;
+  return `<section class="routing-trace feedback-trace ${v ? esc(v.verdict) : ''}"><header><div><span>FEEDBACK LOOP · feedback/${esc(m.loop_slug || '')}</span><b>${esc(served || sampled)}</b></div><em>${esc(verdict)}</em></header><div class="routing-decision-copy"><span class="decision-lane">${m.mode === 'jev' ? 'JEV' : 'PEOPLE'}</span><p>Nexa drew <strong>${esc(sampled)}</strong> from the split (${pct(m.shares?.[m.sampled_arm])} share)${served && served !== sampled ? `; it failed, so <strong>${esc(served)}</strong> answered instead` : ''}${!m.served ? ' — no model answered successfully' : ''}.</p><small>${v ? `RATED ${esc(fmtDate(v.created_at).toUpperCase())}` : m.mode === 'jev' ? 'JEV RATES A SAMPLE OF ANSWERS IN THE BACKGROUND' : 'RATE IT IN THE PLAYGROUND OR THROUGH POST /v1/feedback'}</small></div></section>`;
+}
+
 function traceQuery(offset) {
   const q = new URLSearchParams({ limit: '100', offset: String(offset), status: state.status });
   const search = $('#trace-search').value.trim(); if (search) q.set('search', search);
@@ -456,25 +617,31 @@ function renderTraceDetail() {
     ? `<div class="trace-content"><section class="trace-block"><h3>FULL REQUEST / JSON</h3><pre>${esc(jsonTraceValue(t.request || t.prompt, 'user'))}</pre></section><section class="trace-block"><h3>OUTPUT / JSON</h3><pre>${esc(jsonTraceValue(t.response, 'assistant'))}</pre></section></div>`
     : `<div class="trace-content readable"><section class="trace-block"><h3>INPUT / CURRENT TURN</h3>${traceMessages(t.prompt)}${paramText ? `<p class="trace-params">${esc(paramText)}</p>` : ''}</section><section class="trace-block"><h3>OUTPUT / RESPONSE</h3>${traceResponse(t.response)}</section></div>`;
   const cell = (label, value, title = '') => `<div><span>${label}</span><b title="${esc(title)}">${value}</b></div>`;
-  $('#trace-detail').innerHTML = `<div class="trace-id-line"><span>${esc(t.request_id || t.id)}</span><time>${esc(fmtDate(t.created_at))}</time></div><div class="trace-summary">${cell('OUTCOME', `${esc(t.status.toUpperCase())} / ${t.status_code}`)}${cell('TOKENS', `${fmtNum(t.input_tokens)} IN · ${fmtNum(t.output_tokens)} OUT`)}${cell('LATENCY', durationLabel(t.latency_ms), latencyDetail)}${cell('EST. COST', fmtCost(t.cost_usd))}${cell('FIRST TOKEN', t.ttft_ms ? durationLabel(t.ttft_ms) : t.stream ? '—' : 'NOT STREAMED')}${cell('FINISH', esc((t.finish_reason || '—').toUpperCase()))}${cell('CACHED · REASONING', `${fmtNum(t.cached_tokens)} · ${fmtNum(t.reasoning_tokens)}`)}${cell('CALLER', esc(`${(t.source || 'api').toUpperCase()} · ${t.api_key_name || '—'}`), `Request ID ${t.request_id || '—'}`)}</div>${traceTimeline(t)}${traceRoutingDetail(t)}${t.error ? `<div class="form-error">${esc(t.error)}</div>` : ''}${content}`;
+  $('#trace-detail').innerHTML = `<div class="trace-id-line"><span>${esc(t.request_id || t.id)}</span><time>${esc(fmtDate(t.created_at))}</time></div><div class="trace-summary">${cell('OUTCOME', `${esc(t.status.toUpperCase())} / ${t.status_code}`)}${cell('TOKENS', `${fmtNum(t.input_tokens)} IN · ${fmtNum(t.output_tokens)} OUT`)}${cell('LATENCY', durationLabel(t.latency_ms), latencyDetail)}${cell('EST. COST', fmtCost(t.cost_usd))}${cell('FIRST TOKEN', t.ttft_ms ? durationLabel(t.ttft_ms) : t.stream ? '—' : 'NOT STREAMED')}${cell('FINISH', esc((t.finish_reason || '—').toUpperCase()))}${cell('CACHED · REASONING', `${fmtNum(t.cached_tokens)} · ${fmtNum(t.reasoning_tokens)}`)}${cell('CALLER', esc(`${(t.source || 'api').toUpperCase()} · ${t.api_key_name || '—'}`), `Request ID ${t.request_id || '—'}`)}</div>${traceTimeline(t)}${traceRoutingDetail(t)}${traceFeedbackDetail(t)}${t.error ? `<div class="form-error">${esc(t.error)}</div>` : ''}${content}`;
 }
 function renderProviderSelect() {
-  const select = $('#play-provider'), previous = select.value, smart = state.routingProfiles.length ? '<option value="__smart__">Nexa Smart Routing · AUTO</option>' : '';
-  select.innerHTML = smart + state.providers.filter(p => p.enabled).map(p => `<option value="${esc(p.id)}">${esc(p.name)} · ${esc(p.slug)}</option>`).join('');
+  const select = $('#play-provider'), previous = select.value, smart = state.routingProfiles.length ? '<option value="__smart__">Nexa Smart Routing · AUTO</option>' : '', feedback = state.feedbackLoops.length ? '<option value="__feedback__">Nexa Feedback Loop · LEARNING</option>' : '';
+  select.innerHTML = smart + feedback + state.providers.filter(p => p.enabled).map(p => `<option value="${esc(p.id)}">${esc(p.name)} · ${esc(p.slug)}</option>`).join('');
   if (previous && [...select.options].some(o => o.value === previous)) select.value = previous; if (!select.options.length) select.innerHTML = '<option value="">Add a provider first</option>'; const compare = $('#compare-provider'), compareValue = compare.value; compare.innerHTML = select.innerHTML; if (compareValue && [...compare.options].some(o => o.value === compareValue)) compare.value = compareValue; else if (compare.options.length > 1) compare.selectedIndex = 1; loadModels(); if ($('#play-compare').checked) loadCompareModels();
 }
 async function loadModels(refresh = false) {
-  const id = $('#play-provider').value, model = $('#play-model'), row = model.closest('.model-input-row'); model.innerHTML = '<option>Fetching model catalog…</option>'; model.disabled = true; row.classList.add('loading');
+  const id = $('#play-provider').value, model = $('#play-model'), previous = model.value, row = model.closest('.model-input-row'); model.innerHTML = '<option>Fetching model catalog…</option>'; model.disabled = true; row.classList.add('loading');
   const done = () => { model.disabled = false; row.classList.remove('loading'); updateChatRoute(); };
   if (!id) { model.innerHTML = '<option value="">No provider available</option>'; done(); return; }
-  if (id === '__smart__') { const active = state.routingProfiles.find(p => p.active); model.innerHTML = `${active ? '<option value="smart">smart · active default</option>' : ''}${state.routingProfiles.map(p => `<option value="smart/${esc(p.slug)}">smart/${esc(p.slug)} · ${esc(p.name)}</option>`).join('')}`; $('#model-count').textContent = `${state.routingProfiles.length} PROFILES`; done(); return; }
+  const virtual = virtualModelOptions(id); if (virtual !== null) { model.innerHTML = virtual; if ([...model.options].some(o => o.value === previous)) model.value = previous; $('#model-count').textContent = id === '__smart__' ? `${state.routingProfiles.length} PROFILES` : `${state.feedbackLoops.length} LOOPS`; done(); return; }
   try { const list = await api(`/api/providers/${id}/models?capability=chat${refresh ? '&refresh=1' : ''}`); const names = [...new Set(list.map(x => x.id || x.name).filter(Boolean))].sort(); model.innerHTML = names.map(x => `<option value="${esc(x)}">${esc(x)}</option>`).join('') || '<option value="">No chat models returned</option>'; $('#model-count').textContent = `${names.length} CHAT`; }
   catch (e) { model.innerHTML = '<option value="">Could not load models</option>'; toast(e.message, 'error'); }
   finally { done(); }
 }
+const isVirtual = id => id === '__smart__' || id === '__feedback__';
+function virtualModelOptions(id) {
+  if (id === '__smart__') { const active = state.routingProfiles.find(p => p.active); return `${active ? '<option value="smart">smart · active default</option>' : ''}${state.routingProfiles.map(p => `<option value="smart/${esc(p.slug)}">smart/${esc(p.slug)} · ${esc(p.name)}</option>`).join('')}`; }
+  if (id === '__feedback__') return state.feedbackLoops.map(l => `<option value="feedback/${esc(l.slug)}">feedback/${esc(l.slug)} · ${esc(l.name)} · ${l.mode === 'jev' ? 'JEV' : 'PEOPLE'}${l.status === 'paused' ? ' · PAUSED' : ''}</option>`).join('');
+  return null;
+}
 function toggleComparison() { const enabled = $('#play-compare').checked; $('#compare-controls').classList.toggle('hidden', !enabled); if (enabled) loadCompareModels(); }
-async function loadCompareModels(refresh = false) { const id = $('#compare-provider').value, model = $('#compare-model'), row = model.closest('.model-input-row'); model.disabled = true; row.classList.add('loading'); model.innerHTML = '<option>Fetching model catalog…</option>'; const done = () => { model.disabled = false; row.classList.remove('loading'); }; if (!id) { model.innerHTML = '<option value="">No provider available</option>'; done(); return; } if (id === '__smart__') { const active = state.routingProfiles.find(p => p.active); model.innerHTML = `${active ? '<option value="smart">smart · active default</option>' : ''}${state.routingProfiles.map(p => `<option value="smart/${esc(p.slug)}">smart/${esc(p.slug)} · ${esc(p.name)}</option>`).join('')}`; done(); return; } try { const list = await api(`/api/providers/${id}/models?capability=chat${refresh ? '&refresh=1' : ''}`), names = [...new Set(list.map(x => x.id || x.name).filter(Boolean))].sort(); model.innerHTML = names.map(name => `<option value="${esc(name)}">${esc(name)}</option>`).join('') || '<option value="">No chat models returned</option>'; } catch (e) { model.innerHTML = '<option value="">Could not load models</option>'; toast(e.message, 'error'); } finally { done(); } }
-function updateChatRoute() { const smart = $('#play-provider').value === '__smart__', p = state.providers.find(x => x.id === $('#play-provider').value), model = $('#play-model').value, reasoning = !smart && p?.type === 'openai' && isReasoningModel(model); $('#chat-route').textContent = smart ? (model || 'NO SMART PROFILE') : p && model ? `${p.slug}/${model}` : 'NO ROUTE SELECTED'; $('#play-temperature').disabled = reasoning; $('#play-temperature').title = reasoning ? 'This model controls its own sampling temperature.' : ''; }
+async function loadCompareModels(refresh = false) { const id = $('#compare-provider').value, model = $('#compare-model'), row = model.closest('.model-input-row'); model.disabled = true; row.classList.add('loading'); model.innerHTML = '<option>Fetching model catalog…</option>'; const done = () => { model.disabled = false; row.classList.remove('loading'); }; if (!id) { model.innerHTML = '<option value="">No provider available</option>'; done(); return; } const virtual = virtualModelOptions(id); if (virtual !== null) { model.innerHTML = virtual; done(); return; } try { const list = await api(`/api/providers/${id}/models?capability=chat${refresh ? '&refresh=1' : ''}`), names = [...new Set(list.map(x => x.id || x.name).filter(Boolean))].sort(); model.innerHTML = names.map(name => `<option value="${esc(name)}">${esc(name)}</option>`).join('') || '<option value="">No chat models returned</option>'; } catch (e) { model.innerHTML = '<option value="">Could not load models</option>'; toast(e.message, 'error'); } finally { done(); } }
+function updateChatRoute() { const smart = isVirtual($('#play-provider').value), p = state.providers.find(x => x.id === $('#play-provider').value), model = $('#play-model').value, reasoning = !smart && p?.type === 'openai' && isReasoningModel(model); $('#chat-route').textContent = smart ? (model || 'NOTHING TO ROUTE TO YET') : p && model ? `${p.slug}/${model}` : 'NO ROUTE SELECTED'; $('#play-temperature').disabled = reasoning; $('#play-temperature').title = reasoning ? 'This model controls its own sampling temperature.' : ''; }
 function welcomeHTML() { return '<div class="chat-welcome"><div class="welcome-glyph">N</div><h2>Start a conversation</h2><p>Select a provider and model, then send a message. Requests appear automatically in Traces.</p></div>'; }
 function clearChat() { if (state.abort) state.abort.abort(); state.conversation = []; $('#chat-messages').innerHTML = welcomeHTML(); $('#chat-metrics').textContent = 'READY'; saveConversation(); }
 function saveConversation() { store.set('nexa.playground', { conversation: state.conversation, system: $('#play-system').value }); }
@@ -498,15 +665,16 @@ function renderConversation() { $('#chat-messages').innerHTML = state.conversati
 function addMessage(role, content, loading = false) { $('.chat-welcome')?.remove(); const item = document.createElement('div'); item.className = `chat-message ${role}`; item.innerHTML = `<span class="role">${role === 'user' ? 'YOU' : 'NEXA'}</span><div class="bubble markdown-body ${loading ? 'typing' : ''}">${role === 'assistant' && !loading ? renderMarkdown(content) : esc(content)}</div>`; $('#chat-messages').append(item); $('#chat-messages').scrollTop = $('#chat-messages').scrollHeight; return item; }
 function setMessageMeta(item, parts) { let meta = $('.message-meta', item); if (!meta) { meta = document.createElement('div'); meta.className = 'message-meta'; item.append(meta); } meta.innerHTML = parts.filter(Boolean).map(part => `<span>${esc(part)}</span>`).join(''); }
 function setSending(sending) { const button = $('#chat-send'); button.classList.toggle('stop', sending); $('span', button).textContent = sending ? 'Stop' : 'Send'; $('.button-icon use', button).setAttribute('href', sending ? '#icon-stop' : '#icon-arrow'); }
-function routeLabel(headers, fallback) {
+function routeLabel(headers, fallback, blind = false) {
   const routed = headers.get('X-Nexa-Routed-Model'); if (!routed) return fallback;
+  if (headers.get('X-Nexa-Feedback-Loop')) return blind && headers.get('X-Nexa-Feedback-Mode') === 'human' ? `${fallback} → model hidden until you rate` : `${fallback} → ${routed}`;
   const lane = headers.get('X-Nexa-Routing-Lane'), confidence = Number(headers.get('X-Nexa-Routing-Confidence') || 0);
   return `${fallback} → ${routed} · ${laneName(lane)} · ${Math.round(confidence * 100)}%`;
 }
 async function sendChat(e) {
   e.preventDefault();
   if (state.abort) { state.abort.abort(); return; }
-  const input = $('#chat-input'), text = input.value.trim(), smart = $('#play-provider').value === '__smart__', p = state.providers.find(x => x.id === $('#play-provider').value), model = $('#play-model').value;
+  const input = $('#chat-input'), text = input.value.trim(), smart = isVirtual($('#play-provider').value), p = state.providers.find(x => x.id === $('#play-provider').value), model = $('#play-model').value;
   if (!text || (!smart && !p) || !model) { toast('Choose a provider and model first', 'error'); return; }
   if ($('#play-compare').checked) { await sendComparison(text, smart, p, model); return; }
   input.value = ''; state.conversation.push({ role: 'user', content: text }); addMessage('user', text); saveConversation();
@@ -520,12 +688,12 @@ async function sendChat(e) {
   const jsonMode = $('#play-json').checked;
   if (jsonMode) { request.response_format = { type: 'json_object' }; request.messages = withJsonInstruction(messages); }
   state.abort = new AbortController(); setSending(true); $('#chat-metrics').textContent = 'REQUEST IN FLIGHT…';
-  let content = '', usage = null, ttft = 0, traceID = '', stopped = false, frame = 0;
+  let content = '', usage = null, ttft = 0, traceID = '', stopped = false, frame = 0, headers = null;
   const paint = () => { frame = 0; bubble.innerHTML = renderMarkdown(content || '…'); $('#chat-messages').scrollTop = $('#chat-messages').scrollHeight; };
   try {
     const response = await fetch('/api/playground/chat', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request), signal: state.abort.signal });
-    traceID = response.headers.get('X-Nexa-Trace-Id') || '';
-    $('#chat-route').textContent = routeLabel(response.headers, request.model);
+    traceID = response.headers.get('X-Nexa-Trace-Id') || ''; headers = response.headers;
+    $('#chat-route').textContent = routeLabel(response.headers, request.model, true);
     if (!response.ok) { const data = await response.json().catch(() => ({})); throw new Error(data?.error?.message || `Request failed (${response.status})`); }
     bubble.classList.remove('typing');
     if (stream) {
@@ -557,10 +725,11 @@ async function sendChat(e) {
   const parts = [`${Math.round(performance.now() - started)} MS`]; if (ttft) parts.push(`FIRST TOKEN ${Math.round(ttft)} MS`); if (usage) parts.push(`${fmtNum(usage.total_tokens)} TOKENS`); if (stopped) parts.push('STOPPED');
   setMessageMeta(pending, [durationLabel(performance.now() - started), ttft ? `${durationLabel(ttft)} to first token` : '', usage ? `${fmtNum(usage.total_tokens)} tokens` : '', stopped ? 'Stopped' : '']);
   $('#chat-metrics').innerHTML = `${esc(parts.join(' · '))}${traceID ? ` · <button class="metric-link" data-trace-id="${esc(traceID)}">Open trace</button>` : ''}`;
+  if (content && !stopped && traceID && headers?.get('X-Nexa-Feedback-Loop')) addFeedbackControl(pending, traceID, headers);
   state.abort = null; setSending(false); $('#chat-messages').scrollTop = $('#chat-messages').scrollHeight; loadStats();
   if (traceID) api(`/api/traces/${traceID}`).then(trace => setMessageMeta(pending, [durationLabel(trace.latency_ms), trace.ttft_ms ? `${durationLabel(trace.ttft_ms)} to first token` : '', `${fmtNum(trace.total_tokens)} tokens`, fmtCost(trace.cost_usd)])).catch(() => {});
 }
-async function sendComparison(text, smart, provider, model) { const secondSmart = $('#compare-provider').value === '__smart__', secondProvider = state.providers.find(x => x.id === $('#compare-provider').value), secondModel = $('#compare-model').value; if ((!secondSmart && !secondProvider) || !secondModel) { toast('Choose the second provider and model', 'error'); return; } const input = $('#chat-input'); input.value = ''; state.conversation.push({ role: 'user', content: text }); addMessage('user', text); saveConversation(); const messages = [], system = $('#play-system').value.trim(); if (system) messages.push({ role: 'system', content: system }); messages.push(...state.conversation); const routes = [smart ? model : `${provider.slug}/${model}`, secondSmart ? secondModel : `${secondProvider.slug}/${secondModel}`], shell = addComparisonMessage(routes); state.abort = new AbortController(); setSending(true); $('#chat-metrics').textContent = '2 REQUESTS IN FLIGHT…'; const call = async route => { const started = performance.now(), request = { model: route, messages, max_completion_tokens: Number($('#play-max-tokens').value), stream: false }, routeModel = route.split('/').at(-1); if (!String(route).startsWith('smart') && !isReasoningModel(routeModel)) request.temperature = Number($('#play-temperature').value); if (Number($('#play-top-p').value) !== 1) request.top_p = Number($('#play-top-p').value); const stops = $('#play-stop').value.split(',').map(v => v.trim()).filter(Boolean); if (stops.length) request.stop = stops; if ($('#play-json').checked) { request.response_format = { type: 'json_object' }; request.messages = withJsonInstruction(messages); } const response = await fetch('/api/playground/chat', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request), signal: state.abort.signal }), traceID = response.headers.get('X-Nexa-Trace-Id') || ''; if (!response.ok) { const data = await response.json().catch(() => ({})); throw new Error(data?.error?.message || `Request failed (${response.status})`); } const out = await response.json(), raw = out?.choices?.[0]?.message, content = typeof raw?.content === 'string' ? raw.content : JSON.stringify(raw?.tool_calls || out, null, 2); return { content, usage: out?.usage, traceID, elapsed: performance.now() - started, route: routeLabel(response.headers, route) }; }; const results = await Promise.allSettled(routes.map(call)); results.forEach((result, index) => renderComparisonResult(shell, index, result)); const first = results.find(result => result.status === 'fulfilled'); if (first) { state.conversation.push({ role: 'assistant', content: first.value.content }); saveConversation(); } $('#chat-metrics').textContent = `${results.filter(v => v.status === 'fulfilled').length} / 2 COMPLETE`; state.abort = null; setSending(false); loadStats(); }
+async function sendComparison(text, smart, provider, model) { const secondSmart = isVirtual($('#compare-provider').value), secondProvider = state.providers.find(x => x.id === $('#compare-provider').value), secondModel = $('#compare-model').value; if ((!secondSmart && !secondProvider) || !secondModel) { toast('Choose the second provider and model', 'error'); return; } const input = $('#chat-input'); input.value = ''; state.conversation.push({ role: 'user', content: text }); addMessage('user', text); saveConversation(); const messages = [], system = $('#play-system').value.trim(); if (system) messages.push({ role: 'system', content: system }); messages.push(...state.conversation); const routes = [smart ? model : `${provider.slug}/${model}`, secondSmart ? secondModel : `${secondProvider.slug}/${secondModel}`], shell = addComparisonMessage(routes); state.abort = new AbortController(); setSending(true); $('#chat-metrics').textContent = '2 REQUESTS IN FLIGHT…'; const call = async route => { const started = performance.now(), request = { model: route, messages, max_completion_tokens: Number($('#play-max-tokens').value), stream: false }, routeModel = route.split('/').at(-1); if (!/^(smart|feedback\/)/.test(route) && !isReasoningModel(routeModel)) request.temperature = Number($('#play-temperature').value); if (Number($('#play-top-p').value) !== 1) request.top_p = Number($('#play-top-p').value); const stops = $('#play-stop').value.split(',').map(v => v.trim()).filter(Boolean); if (stops.length) request.stop = stops; if ($('#play-json').checked) { request.response_format = { type: 'json_object' }; request.messages = withJsonInstruction(messages); } const response = await fetch('/api/playground/chat', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request), signal: state.abort.signal }), traceID = response.headers.get('X-Nexa-Trace-Id') || ''; if (!response.ok) { const data = await response.json().catch(() => ({})); throw new Error(data?.error?.message || `Request failed (${response.status})`); } const out = await response.json(), raw = out?.choices?.[0]?.message, content = typeof raw?.content === 'string' ? raw.content : JSON.stringify(raw?.tool_calls || out, null, 2); return { content, usage: out?.usage, traceID, elapsed: performance.now() - started, route: routeLabel(response.headers, route) }; }; const results = await Promise.allSettled(routes.map(call)); results.forEach((result, index) => renderComparisonResult(shell, index, result)); const first = results.find(result => result.status === 'fulfilled'); if (first) { state.conversation.push({ role: 'assistant', content: first.value.content }); saveConversation(); } $('#chat-metrics').textContent = `${results.filter(v => v.status === 'fulfilled').length} / 2 COMPLETE`; state.abort = null; setSending(false); loadStats(); }
 function addComparisonMessage(routes) { $('.chat-welcome')?.remove(); const item = document.createElement('div'); item.className = 'comparison-message'; item.innerHTML = `<span class="role">COMPARE</span><div class="comparison-grid">${routes.map((route, index) => `<article data-comparison="${index}"><header><span>${esc(route)}</span></header><div class="bubble markdown-body typing"></div><footer>Request in flight…</footer></article>`).join('')}</div>`; $('#chat-messages').append(item); $('#chat-messages').scrollTop = $('#chat-messages').scrollHeight; return item; }
 function renderComparisonResult(shell, index, result) { const card = $(`[data-comparison="${index}"]`, shell), bubble = $('.bubble', card), footer = $('footer', card); bubble.classList.remove('typing'); if (result.status === 'rejected') { bubble.textContent = `Request failed: ${result.reason.message}`; footer.textContent = 'FAILED'; return; } const value = result.value; $('header span', card).textContent = value.route; bubble.innerHTML = $('#play-json').checked ? jsonReplyHTML(value.content) : renderMarkdown(value.content); footer.textContent = `${durationLabel(value.elapsed)} · ${fmtNum(value.usage?.total_tokens)} tokens`; if (value.traceID) api(`/api/traces/${value.traceID}`).then(trace => { footer.innerHTML = `${durationLabel(trace.latency_ms)} · ${fmtNum(trace.total_tokens)} tokens · ${fmtCost(trace.cost_usd)} · <button class="metric-link" data-trace-id="${esc(value.traceID)}">Open trace</button>`; }).catch(() => {}); }
 function isReasoningModel(model) { const id = model.toLowerCase(); return /^gpt-5/.test(id) || /^o[134]/.test(id); }
