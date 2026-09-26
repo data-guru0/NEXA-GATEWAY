@@ -116,6 +116,10 @@ func (g *Gateway) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 		g.smart(w, r, payload, rawMessages, t, info.Start)
 		return
 	}
+	if strings.HasPrefix(model, "feedback/") {
+		g.feedbackLoop(w, r, payload, rawMessages, t, info.Start)
+		return
+	}
 	p, upstreamModel, err := g.resolve(model, strings.TrimSpace(r.Header.Get("X-Nexa-Provider")))
 	if err != nil {
 		fail(404, err.Error(), "invalid_request_error")
@@ -961,52 +965,74 @@ func (g *Gateway) smart(w http.ResponseWriter, r *http.Request, payload map[stri
 		t.Metadata = smartMetadata(profile, decision, nil)
 		return
 	}
+	candidates := make([]routeCandidate, 0, len(decision.Ranked))
+	for _, ranked := range decision.Ranked {
+		candidates = append(candidates, routeCandidate{ID: ranked.Target.ID, Label: ranked.ProviderSlug + "/" + ranked.Target.Model, Provider: ranked.Provider, Model: ranked.Target.Model, InputCost: ranked.Target.InputCostPerMillion, OutputCost: ranked.Target.OutputCostPerMillion})
+	}
+	attempts, chosen := g.runRoutes(w, r, payload, t, start, candidates, profile.MaxRetries, time.Duration(profile.RequestTimeoutMS)*time.Millisecond, func(h http.Header, c routeCandidate) {
+		h.Set("X-Nexa-Routing-Profile", profile.Slug)
+		h.Set("X-Nexa-Routed-Model", c.Label)
+		h.Set("X-Nexa-Routing-Lane", decision.Signals.Lane)
+		h.Set("X-Nexa-Routing-Confidence", strconv.FormatFloat(decision.Signals.Confidence, 'f', 2, 64))
+	})
+	t.Metadata = smartMetadata(profile, decision, attempts)
+	if chosen != nil && (chosen.InputCost > 0 || chosen.OutputCost > 0) {
+		t.CostUSD = (float64(t.InputTokens)*chosen.InputCost + float64(t.OutputTokens)*chosen.OutputCost) / 1_000_000
+	}
+}
+
+// routeCandidate is one provider/model that a virtual model (smart/… or feedback/…) may use.
+type routeCandidate struct {
+	ID, Label             string
+	Provider              store.Provider
+	Model                 string
+	InputCost, OutputCost float64
+}
+
+// runRoutes tries candidates in order until one succeeds. An attempt stays private
+// until its provider answers 2xx, then streams straight to the client; retryable
+// failures are retried, 401/403/404 move to the next candidate, other 4xx stop.
+// When nothing succeeds, the last failure (or a 503) is written to the client.
+func (g *Gateway) runRoutes(w http.ResponseWriter, r *http.Request, payload map[string]any, t *store.Trace, start time.Time, candidates []routeCandidate, maxRetries int, timeout time.Duration, setHeaders func(http.Header, routeCandidate)) ([]routeAttempt, *routeCandidate) {
 	base := *t
 	attempts := []routeAttempt{}
 	var last *gateWriter
-	var chosen *routing.RankedTarget
-	timeout := time.Duration(profile.RequestTimeoutMS) * time.Millisecond
-	defer func() { t.Metadata = smartMetadata(profile, decision, attempts) }()
+	var chosen *routeCandidate
 routes:
-	for i := range decision.Ranked {
-		ranked := &decision.Ranked[i]
-		for n := 0; n <= profile.MaxRetries; n++ {
+	for i := range candidates {
+		c := &candidates[i]
+		for n := 0; n <= maxRetries; n++ {
 			if r.Context().Err() != nil {
 				t.StatusCode, t.Error = 499, "client disconnected"
-				return
+				return attempts, nil
 			}
 			at := base
-			at.ProviderID, at.ProviderName, at.Model = ranked.Provider.ID, ranked.Provider.Name, ranked.Target.Model
-			gw := &gateWriter{w: w, header: http.Header{}, beforeCommit: func(h http.Header) {
-				h.Set("X-Nexa-Routing-Profile", profile.Slug)
-				h.Set("X-Nexa-Routed-Model", ranked.ProviderSlug+"/"+ranked.Target.Model)
-				h.Set("X-Nexa-Routing-Lane", decision.Signals.Lane)
-				h.Set("X-Nexa-Routing-Confidence", strconv.FormatFloat(decision.Signals.Confidence, 'f', 2, 64))
-			}}
+			at.ProviderID, at.ProviderName, at.Model = c.Provider.ID, c.Provider.Name, c.Model
+			gw := &gateWriter{w: w, header: http.Header{}, beforeCommit: func(h http.Header) { setHeaders(h, *c) }}
 			// The timeout covers only the wait for response headers; once the
 			// provider starts answering, a long generation is never cut off.
 			ctx, cancel := context.WithCancel(r.Context())
 			var timedOut atomic.Bool
 			timer := time.AfterFunc(timeout, func() { timedOut.Store(true); cancel() })
 			attemptStarted := time.Now()
-			g.forward(gw, ctx, r.Header, attempt{provider: ranked.Provider, model: ranked.Target.Model, payload: clonePayload(payload), stream: t.Stream, start: start, onHeaders: func() { timer.Stop() }}, &at)
+			g.forward(gw, ctx, r.Header, attempt{provider: c.Provider, model: c.Model, payload: clonePayload(payload), stream: t.Stream, start: start, onHeaders: func() { timer.Stop() }}, &at)
 			timer.Stop()
 			cancel()
 			if timedOut.Load() && r.Context().Err() == nil {
 				at.StatusCode, at.Error = 504, fmt.Sprintf("no response within %s", timeout)
 			}
 			retryable := isRetryable(at.StatusCode)
-			attempts = append(attempts, routeAttempt{ranked.Target.ID, ranked.ProviderSlug + "/" + ranked.Target.Model, n + 1, at.StatusCode, msSince(attemptStarted), retryable, at.Error})
+			attempts = append(attempts, routeAttempt{c.ID, c.Label, n + 1, at.StatusCode, msSince(attemptStarted), retryable, at.Error})
 			*t = at
 			if at.Status == "success" {
-				chosen = ranked
+				chosen = c
 				break routes
 			}
 			if r.Context().Err() != nil {
 				t.StatusCode, t.Error = 499, "client disconnected"
-				return
+				return attempts, nil
 			}
-			g.Store.RecordRoutingFailure(ranked.Provider.ID, ranked.Target.Model, msSince(attemptStarted))
+			g.Store.RecordRoutingFailure(c.Provider.ID, c.Model, msSince(attemptStarted))
 			if gw.committed {
 				break routes // the stream already started; failing over would duplicate output
 			}
@@ -1017,12 +1043,12 @@ routes:
 				}
 				break routes // the request itself is invalid; every lane would reject it
 			}
-			if n < profile.MaxRetries {
+			if n < maxRetries {
 				select {
 				case <-time.After(time.Duration(100*(1<<n)) * time.Millisecond):
 				case <-r.Context().Done():
 					t.StatusCode, t.Error = 499, "client disconnected"
-					return
+					return attempts, nil
 				}
 			}
 		}
@@ -1030,16 +1056,15 @@ routes:
 	if chosen == nil {
 		if last == nil {
 			if len(attempts) == 0 {
-				fail(503, "No routing target was available.")
+				t.StatusCode, t.Error = 503, "No routing target was available."
+				writeOpenAIError(w, 503, t.Error, "routing_error")
 			}
-			return
+			return attempts, nil
 		}
 		last.replay()
-		return
+		return attempts, nil
 	}
-	if chosen.Target.InputCostPerMillion > 0 || chosen.Target.OutputCostPerMillion > 0 {
-		t.CostUSD = (float64(t.InputTokens)*chosen.Target.InputCostPerMillion + float64(t.OutputTokens)*chosen.Target.OutputCostPerMillion) / 1_000_000
-	}
+	return attempts, chosen
 }
 
 func smartMetadata(p store.RoutingProfile, d routing.Decision, attempts []routeAttempt) string {
