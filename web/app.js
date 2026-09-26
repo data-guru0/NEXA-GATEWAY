@@ -1,6 +1,6 @@
 const $ = (q, root = document) => root.querySelector(q);
 const $$ = (q, root = document) => [...root.querySelectorAll(q)];
-const state = { user: null, providers: [], routingProfiles: [], routingTargets: [], routingModels: {}, traces: [], traceTotal: 0, status: 'all', conversation: [], code: 'python', chartRange: '24h', chartFrom: '', chartTo: '', selectedTrace: null, traceView: 'readable', traceRequest: 0, abort: null, poll: null, headersDirty: false, recentTraces: [], traceList: [], users: [], apiKeys: [], prices: [], priceExpanded: false, stats: null, providerStats: {}, routingStats: null, feedbackLoops: [], feedbackSelected: '', feedbackStats: null, loopArms: [], armModels: {} };
+const state = { user: null, providers: [], routingProfiles: [], routingTargets: [], routingModels: {}, traces: [], traceTotal: 0, status: 'all', conversation: [], code: 'python', chartRange: '24h', chartFrom: '', chartTo: '', selectedTrace: null, traceView: 'readable', traceRequest: 0, abort: null, poll: null, headersDirty: false, recentTraces: [], traceList: [], users: [], apiKeys: [], prices: [], priceExpanded: false, stats: null, providerStats: {}, routingStats: null, feedbackLoops: [], feedbackSelected: '', feedbackStats: null, loopArms: [], armModels: {}, cacheModel: '' };
 
 const api = async (path, options = {}) => {
   const response = await fetch(path, { credentials: 'same-origin', headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }, ...options });
@@ -101,6 +101,19 @@ function bindEvents() {
   $('#add-loop-arm').addEventListener('click', () => { if (state.loopArms.length < 4) { state.loopArms.push({ provider_id: state.providers.find(p => p.enabled)?.id || '', model: '' }); renderLoopArms(); } });
   $('#loop-name').addEventListener('input', () => { if (!$('#loop-id').value) $('#loop-slug').value = slugify($('#loop-name').value); });
   $$('input[name=loop-mode]').forEach(x => x.addEventListener('change', updateLoopMode));
+  $('#loop-auto').addEventListener('change', updateLoopAuto);
+  $('#cache-form').addEventListener('submit', saveCache); $('#clear-cache').addEventListener('click', clearCache);
+  $('#cache-semantic').addEventListener('change', updateCacheFields); $('#cache-provider').addEventListener('change', () => { state.cacheModel = ''; loadEmbeddingModels(); });
+  $('#limits-form').addEventListener('submit', saveLimits);
+  ['#limit-budget', '#limit-rpm', '#limit-tpm'].forEach(id => $(id).addEventListener('input', updateLimitsUI));
+  $('#limits-form').addEventListener('click', e => {
+    const preset = e.target.closest('[data-preset]'); if (preset) { const input = $('#' + preset.closest('.limit-presets').dataset.for); input.value = preset.dataset.preset; updateLimitsUI(); }
+    const remove = e.target.closest('[data-remove-model]'); if (remove) setLimitModels(limitModels().filter(m => m !== remove.dataset.removeModel));
+    const suggest = e.target.closest('[data-suggest-model]'); if (suggest) addLimitModel(suggest.dataset.suggestModel);
+  });
+  $('#limit-model-add').addEventListener('click', () => addLimitModel($('#limit-model-input').value));
+  $('#limit-model-input').addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addLimitModel($('#limit-model-input').value); } if (e.key === 'Backspace' && !e.target.value) setLimitModels(limitModels().slice(0, -1)); });
+  $$('[data-export]').forEach(x => x.addEventListener('click', () => exportTraces(x.dataset.export)));
   $('#routing-name').addEventListener('input', () => { if (!$('#routing-id').value) $('#routing-slug').value = slugify($('#routing-name').value); });
   $$('input[name=provider-type]').forEach(x => x.addEventListener('change', providerTypeChanged));
   $('#provider-name').addEventListener('input', () => { if (!$('#provider-id').value) $('#provider-slug').value = slugify($('#provider-name').value); });
@@ -155,6 +168,7 @@ function bindEvents() {
     const selectLoop = e.target.closest('[data-select-loop]'); if (selectLoop) { state.feedbackSelected = selectLoop.dataset.selectLoop; renderLoopTabs(); loadFeedbackStats(); }
     if (e.target.closest('[data-new-loop]')) openFeedbackLoop();
     const removeArm = e.target.closest('[data-remove-arm]'); if (removeArm && state.loopArms.length > 2) { state.loopArms.splice(Number(removeArm.dataset.removeArm), 1); renderLoopArms(); }
+    const limits = e.target.closest('[data-key-limits]'); if (limits) openLimits(limits.dataset.keyLimits);
     const vote = e.target.closest('[data-vote]'); if (vote && !vote.closest('.busy')) voteOnAnswer(vote);
     const removeTarget = e.target.closest('[data-remove-target]'); if (removeTarget) { state.routingTargets.splice(Number(removeTarget.dataset.removeTarget), 1); renderRoutingTargets(); }
   });
@@ -181,10 +195,11 @@ function showApp() {
 }
 
 function route() {
-  if (!state.user) return; const name = (location.hash || '#overview').slice(1); const valid = ['overview', 'providers', 'routing', 'feedback', 'traces', 'playground', 'team']; const current = valid.includes(name) ? name : 'overview';
+  if (!state.user) return; const name = (location.hash || '#overview').slice(1); const valid = ['overview', 'providers', 'routing', 'feedback', 'cache', 'traces', 'playground', 'team']; const current = valid.includes(name) ? name : 'overview';
   $$('.page').forEach(x => x.classList.toggle('active', x.id === `page-${current}`)); $$('[data-route]').forEach(x => x.classList.toggle('active', x.dataset.route === current)); $('#page-crumb').textContent = current.toUpperCase();
   clearInterval(state.poll);
   if (current === 'overview') state.poll = setInterval(() => { if (!document.hidden) { loadStats(); loadRecent(); loadProviders(false); } }, 5000);
+  if (current === 'cache') state.poll = setInterval(() => { if (!document.hidden) loadCache(false); }, 5000);
   if (current === 'feedback') state.poll = setInterval(() => { if (!document.hidden && !$('#loop-dialog').open) loadFeedbackLoops(); }, 5000);
   loadRoute();
 }
@@ -194,6 +209,7 @@ function loadRoute(force = false) {
   if (current === 'providers') { loadProviders(); loadPrices(); }
   if (current === 'routing') { loadProviders(false); loadRoutingStats(); loadRoutingProfiles(); }
   if (current === 'feedback') { loadProviders(false); loadFeedbackLoops(); }
+  if (current === 'cache') loadProviders(false).then(() => loadCache(true));
   if (current === 'traces') { loadProviders(false); loadTraces(); }
   if (current === 'playground') { loadProviders(false, true); loadRoutingProfiles(false); loadFeedbackLoops(false); }
   if (current === 'team') { loadUsers(); loadApiKeys(); }
@@ -252,7 +268,7 @@ function renderChart(points) {
 async function loadRecent() { try { const result = await api('/api/traces?limit=5'); state.traceTotal = result.total; state.recentTraces = result.data; $('#recent-traces').innerHTML = traceRows(result.data, false, true); renderOverviewState(); } catch {} }
 function traceRows(rows, details = true, clickable = true, emptyMessage = 'No traces yet. Send a request in Playground to begin.') {
   const columns = details ? 9 : 7; if (!rows.length) return `<tr><td colspan="${columns}" class="empty-row">${esc(emptyMessage)}</td></tr>`;
-  return rows.map(t => { const metadata = parseJSON(t.metadata) || {}, lane = metadata.lane || metadata.signals?.lane || metadata.signals?.complexity; return `<tr ${clickable ? `data-trace-id="${esc(t.id)}" tabindex="0"` : ''}><td><span class="status-pill ${t.status === 'success' ? '' : 'error'}">${esc(t.status)}${t.status_code && t.status !== 'success' ? ` · ${t.status_code}` : ''}</span></td><td><span class="route-tag">${esc(t.provider_name || 'Unresolved')}</span>${t.source === 'playground' ? '<small class="source-tag">LAB</small>' : ''}</td><td><span class="model-name">${esc(t.model || 'Unknown model')}</span>${t.stream ? '<small class="source-tag">SSE</small>' : ''}</td>${details ? `<td>${lane ? `<span class="decision-lane ${esc(lane)}">${esc(laneName(lane))}</span>` : '—'}</td><td>${esc(t.api_key_name || 'Master')}</td>` : ''}<td>${fmtNum(t.total_tokens)}</td><td>${durationLabel(t.latency_ms)}</td><td>${fmtCost(t.cost_usd)}</td><td>${details ? esc(fmtDate(t.created_at)) : esc(fmtTime(t.created_at))}</td></tr>`; }).join('');
+  return rows.map(t => { const metadata = parseJSON(t.metadata) || {}, lane = metadata.lane || metadata.signals?.lane || metadata.signals?.complexity; return `<tr ${clickable ? `data-trace-id="${esc(t.id)}" tabindex="0"` : ''}><td><span class="status-pill ${t.status === 'success' ? '' : 'error'}">${esc(t.status)}${t.status_code && t.status !== 'success' ? ` · ${t.status_code}` : ''}</span></td><td><span class="route-tag">${esc(t.provider_name || 'Unresolved')}</span>${t.source === 'playground' ? '<small class="source-tag">LAB</small>' : ''}</td><td><span class="model-name">${esc(t.model || 'Unknown model')}</span>${t.stream ? '<small class="source-tag">SSE</small>' : ''}${traceTags(metadata)}</td>${details ? `<td>${lane ? `<span class="decision-lane ${esc(lane)}">${esc(laneName(lane))}</span>` : '—'}</td><td>${esc(t.api_key_name || 'Master')}</td>` : ''}<td>${fmtNum(t.total_tokens)}</td><td>${durationLabel(t.latency_ms)}</td><td>${fmtCost(t.cost_usd)}</td><td>${details ? esc(fmtDate(t.created_at)) : esc(fmtTime(t.created_at))}</td></tr>`; }).join('');
 }
 
 async function loadProviders(render = true, select = false) {
@@ -444,19 +460,24 @@ function renderLoopDetail() {
   const root = $('#loop-detail'), x = state.feedbackStats;
   if (!state.feedbackLoops.length) { root.innerHTML = `<div class="routing-empty loop-empty"><span class="panel-kicker">NO FEEDBACK LOOPS YET</span><h2>Let ratings pick your model.</h2><p>Put two to four models behind one model name. Nexa starts with an even split, then sends more traffic to the models that people — or Jev — rate best.</p>${isAdmin() ? `<button class="primary-action compact" type="button" data-new-loop><span>Create first loop</span>${uiIcon('plus')}</button>` : ''}</div>`; return; }
   if (!x) return;
-  const l = x.loop, arms = x.arms, jev = l.mode === 'jev', paused = l.status === 'paused', leader = arms.find(a => a.id === x.leader.arm_id);
+  const l = x.loop, arms = x.arms, jev = l.mode === 'jev', paused = l.status === 'paused', concluded = l.status === 'concluded', leader = arms.find(a => a.id === x.leader.arm_id), winner = arms.find(a => a.id === l.winner_arm_id);
   const armIndex = id => arms.findIndex(a => a.id === id), label = id => arms.find(a => a.id === id)?.label || 'Removed model';
   let verdict;
-  if (!x.counted_votes) verdict = `<span class="loop-chip">EVEN SPLIT</span><strong>Waiting for ratings</strong><p>${jev ? `Jev rates answers as traffic arrives. Send requests to feedback/${esc(l.slug)}.` : 'Rate answers in the Playground or from your app — every rating moves the split.'}</p>`;
+  if (concluded && winner) verdict = `<span class="loop-chip ready">WINNER</span><strong><i class="arm-swatch arm-${armIndex(winner.id)}"></i>${esc(winner.label)}</strong><p>Picked ${l.concluded_by === 'auto' ? 'automatically' : 'by hand'} ${esc(ago(l.concluded_at))}. All traffic goes to this model; the others stay as fallbacks.${costComparison(winner, arms)}</p>`;
+  else if (!x.counted_votes) verdict = `<span class="loop-chip">EVEN SPLIT</span><strong>Waiting for ratings</strong><p>${jev ? `Jev rates answers as traffic arrives. Send requests to feedback/${esc(l.slug)}.` : 'Rate answers in the Playground or from your app — every rating moves the split.'}</p>`;
   else verdict = `<span class="loop-chip ${x.leader.conclusive ? 'ready' : ''}">${x.leader.conclusive ? 'READY TO CONCLUDE' : 'STILL LEARNING'}</span><strong><i class="arm-swatch arm-${armIndex(leader.id)}"></i>${esc(leader.label)}</strong><p>${pct(x.leader.prob_best)} chance it is the best model${x.leader.conclusive ? '. You can send all traffic to it.' : ` after ${fmtNum(x.counted_votes)} ratings.`}</p>`;
   if (jev && !l.jev_key_configured) verdict += `<p class="loop-paused-note loop-warning">No Jev key — answers are not being rated. Add one under Edit, or set JEV_API_KEY.</p>`;
+  if (!concluded && !paused && x.leader.conclusive && !l.auto_conclude) verdict += `<p class="loop-paused-note">The leader is clear. Send all traffic to it below, or keep learning.</p>`;
+  const judging = x.judging || {};
+  if (jev && judging.failed) verdict += `<p class="loop-paused-note loop-warning">${fmtNum(judging.failed)} answer${judging.failed > 1 ? 's' : ''} could not be rated: ${esc((judging.recent_failures?.[0]?.last_error || 'unknown error').slice(0, 120))}.</p>`;
   if (paused) verdict += `<p class="loop-paused-note">Paused — the split is frozen.${jev ? ' Jev is not rating.' : ' Ratings are still recorded.'}</p>`;
   const segments = arms.map((a, i) => `<span class="arm-${i}" data-width="${a.share * 100}" title="${esc(a.label)} · ${pct(a.share, 1)}">${a.share >= .09 ? `<b>${pct(a.share)}</b>` : ''}</span>`).join('');
   const legend = arms.map((a, i) => `<li><i class="arm-swatch arm-${i}"></i><span title="${esc(a.label)}">${esc(a.label)}</span><b>${pct(a.share)}</b>${paused && Math.abs(a.learned_share - a.share) > .005 ? `<small>learned ${pct(a.learned_share)}</small>` : ''}</li>`).join('');
-  const actions = `<div class="loop-actions" data-admin><button type="button" data-loop-action="${paused ? 'resume' : 'pause'}">${uiIcon(paused ? 'play' : 'pause')}${paused ? 'Resume' : 'Pause'}</button><button type="button" data-loop-action="edit">Edit</button><button type="button" data-loop-action="reset">Reset ratings</button><button type="button" class="danger" data-loop-action="delete">${uiIcon('trash')}Delete</button></div>`;
-  const hero = `<article class="loop-hero ${paused ? 'paused' : ''}"><div class="loop-summary"><span class="status-beacon"><i></i></span><div><span class="status-kicker">${jev ? 'JEV JUDGES' : 'PEOPLE RATE'} · ${paused ? 'PAUSED' : 'LEARNING'}</span><h2>${esc(l.name)}</h2><button type="button" class="loop-model" data-copy="feedback/${esc(l.slug)}" title="Copy model name">feedback/${esc(l.slug)}${uiIcon('copy')}</button></div></div><div class="loop-split"><span class="status-kicker">LIVE TRAFFIC SPLIT</span><div class="split-bar">${segments}</div><ul class="split-legend">${legend}</ul></div><div class="loop-verdict">${verdict}</div>${actions}</article>`;
+  const primary = concluded ? `<button type="button" data-loop-action="resume">${uiIcon('play')}Reopen learning</button>` : `<button type="button" data-loop-action="${paused ? 'resume' : 'pause'}">${uiIcon(paused ? 'play' : 'pause')}${paused ? 'Resume' : 'Pause'}</button>${!paused && x.counted_votes && leader ? `<button type="button" class="${x.leader.conclusive ? 'go' : ''}" data-loop-action="conclude">Send all to leader</button>` : ''}`;
+  const actions = `<div class="loop-actions" data-admin>${primary}${jev && judging.failed ? `<button type="button" data-loop-action="retry-judging">Retry failed</button>` : ''}<button type="button" data-loop-action="edit">Edit</button><button type="button" data-loop-action="reset">Reset ratings</button><button type="button" class="danger" data-loop-action="delete">${uiIcon('trash')}Delete</button></div>`;
+  const hero = `<article class="loop-hero ${paused ? 'paused' : ''} ${concluded ? 'concluded' : ''}"><div class="loop-summary"><span class="status-beacon"><i></i></span><div><span class="status-kicker">${jev ? 'JEV JUDGES' : 'PEOPLE RATE'} · ${paused ? 'PAUSED' : concluded ? 'CONCLUDED' : 'LEARNING'}</span><h2>${esc(l.name)}</h2><button type="button" class="loop-model" data-copy="feedback/${esc(l.slug)}" title="Copy model name">feedback/${esc(l.slug)}${uiIcon('copy')}</button></div></div><div class="loop-split"><span class="status-kicker">LIVE TRAFFIC SPLIT</span><div class="split-bar">${segments}</div><ul class="split-legend">${legend}</ul></div><div class="loop-verdict">${verdict}</div>${actions}</article>`;
   const cell = (name, value, note) => `<div><span>${name}</span><b>${value}</b><small>${note}</small></div>`;
-  const stats = `<div class="loop-stats">${cell('REQUESTS SERVED', fmtNum(x.served), 'through this loop')}${cell('RATINGS COUNTED', fmtNum(x.counted_votes), x.uncertain_votes ? `${fmtNum(x.uncertain_votes)} unsure · not counted` : jev ? 'from Jev' : 'from people')}${cell('COVERAGE', pct(x.coverage), 'of served answers rated')}${cell('CONFIGURATION', `${pct(l.min_share)} min`, `last ${fmtNum(l.window)} ratings per model`)}</div>`;
+  const stats = `<div class="loop-stats">${cell('REQUESTS SERVED', fmtNum(x.served), 'through this loop')}${cell('RATINGS COUNTED', fmtNum(x.counted_votes), jev ? `${fmtNum((judging.waiting || 0) + (judging.working || 0))} in the judging queue · ${fmtNum(judging.retrying || 0)} retrying${x.uncertain_votes ? ` · ${fmtNum(x.uncertain_votes)} unsure` : ''}` : x.uncertain_votes ? `${fmtNum(x.uncertain_votes)} unsure · not counted` : 'from people')}${cell('COVERAGE', pct(x.coverage), 'of served answers rated')}${cell('CONFIGURATION', `${pct(l.min_share)} min`, `last ${fmtNum(l.window)} ratings · ${l.auto_conclude ? `auto winner at ${pct(l.conclude_confidence, 1)} after ${fmtNum(l.conclude_min_votes)}` : 'winner picked by hand'}`)}</div>`;
   const rows = arms.map((a, i) => { const rated = a.up + a.down, [low, high] = a.interval || [0, 1]; return `<tr><td><div class="arm-cell"><i class="arm-swatch arm-${i}"></i><span class="provider-mini">${providerMark(a.provider_type)}</span><b title="${esc(a.label)}">${esc(a.label)}</b>${a.id === leader?.id && x.counted_votes ? '<small class="leader-tag">LEADER</small>' : ''}${a.provider_enabled ? '' : '<small class="source-tag">PROVIDER PAUSED</small>'}</div></td><td><b>${pct(a.share)}</b></td><td>${pct(a.prob_best)}</td><td><span class="vote-count up">${uiIcon('thumb-up')}${voteNumber(a.up)}</span><span class="vote-count down">${uiIcon('thumb-down')}${voteNumber(a.down)}</span></td><td><div class="like-rate"><b>${rated ? pct(a.like_rate) : '—'}</b><span class="like-range" title="90% range: ${pct(low)}–${pct(high)}"><i data-left="${low * 100}" data-width="${(high - low) * 100}"></i>${rated ? `<em data-left="${a.like_rate * 100}"></em>` : ''}</span><small>${pct(low)}–${pct(high)}</small></div></td><td>${fmtNum(a.requests)}</td><td class="${a.errors ? 'loop-errors' : ''}">${a.requests ? pct(a.error_rate, 1) : '—'}</td><td>${a.requests ? `${durationLabel(a.avg_latency_ms)} · ${durationLabel(a.p95_latency_ms)}` : '—'}</td><td>${fmtCost(a.avg_cost)}</td><td>${fmtCost(a.cost_per_like)}</td></tr>`; }).join('');
   const board = `<article class="panel loop-board"><header class="panel-head"><div><span class="panel-kicker">WINDOW: LAST ${fmtNum(l.window)} RATINGS PER MODEL</span><h2>Model scoreboard</h2></div><span class="panel-note">Like rate shows the likely range (90%) — it narrows as ratings arrive</span></header><div class="table-wrap"><table><thead><tr><th>MODEL</th><th>SHARE</th><th>CHANCE BEST</th><th>RATINGS</th><th>LIKE RATE</th><th>REQUESTS</th><th>ERRORS</th><th>LATENCY AVG · P95</th><th>AVG COST</th><th>COST / LIKE</th></tr></thead><tbody>${rows}</tbody></table></div></article>`;
   const chart = `<article class="panel loop-history-panel"><header class="panel-head"><div><span class="panel-kicker">SPLIT OVER TIME</span><h2>How traffic moved</h2></div><div class="legend">${arms.map((a, i) => `<span><i class="arm-swatch arm-${i}"></i>${esc(a.model)}</span>`).join('')}</div></header>${loopHistoryChart(x.history, arms)}</article>`;
@@ -479,9 +500,11 @@ function loopHistoryChart(history, arms) {
 async function feedbackAction(action) {
   const l = state.feedbackStats?.loop; if (!l) return;
   if (action === 'edit') { openFeedbackLoop(l.id); return; }
+  if (action === 'conclude') { const lead = state.feedbackStats.arms.find(a => a.id === state.feedbackStats.leader.arm_id); if (!await confirmAction(`Send all traffic to ${lead?.label || 'the leader'}?`, 'The other models stay as fallbacks if it fails. Reopen learning at any time.', 'Send all traffic')) return; }
   if (action === 'reset' && !await confirmAction(`Reset ratings for ${l.name}?`, 'Every rating in this loop is deleted and traffic returns to an even split. Traces are kept.', 'Reset')) return;
   if (action === 'delete' && !await confirmAction(`Delete ${l.name}?`, `Applications calling feedback/${l.slug} will fail. Its ratings are deleted; traces are kept.`, 'Delete')) return;
-  const done = { pause: 'Loop paused · split frozen', resume: 'Loop resumed', reset: 'Ratings cleared · split is even again', delete: 'Feedback loop deleted' }[action];
+  if (action === 'retry-judging') { try { const r = await api(`/api/feedback/loops/${l.id}/judging/retry`, { method: 'POST', body: '{}' }); toast(`${fmtNum(r.requeued)} rating${r.requeued === 1 ? '' : 's'} back in the judging queue`); loadFeedbackLoops(); } catch (e) { toast(e.message, 'error'); } return; }
+  const done = { pause: 'Loop paused · split frozen', resume: 'Loop is learning again', conclude: 'All traffic now goes to the leader', reset: 'Ratings cleared · split is even again', delete: 'Feedback loop deleted' }[action];
   try { await api(`/api/feedback/loops/${l.id}${action === 'delete' ? '' : `/${action}`}`, action === 'delete' ? { method: 'DELETE' } : { method: 'POST', body: '{}' }); toast(done); loadFeedbackLoops(); }
   catch (e) { toast(e.message, 'error'); }
 }
@@ -490,9 +513,16 @@ function openFeedbackLoop(id = '') {
   $('#loop-form').reset(); $('#loop-id').value = l?.id || ''; $('#loop-dialog-title').textContent = l ? 'Edit feedback loop' : 'Create feedback loop';
   $('#loop-name').value = l?.name || ''; $('#loop-slug').value = l?.slug || ''; $(`input[name=loop-mode][value="${l?.mode || 'human'}"]`).checked = true;
   $('#loop-jev-key').value = ''; $('#loop-jev-status').textContent = l?.jev_key_configured ? 'KEY READY' : '';
+  $('#loop-auto').checked = !!l?.auto_conclude; $('#loop-confidence').value = Math.round((l?.conclude_confidence ?? .95) * 1000) / 10; $('#loop-min-votes').value = l?.conclude_min_votes || 30;
   $('#loop-jev-sample').value = Math.round((l?.jev_sample ?? 1) * 100); $('#loop-min-share').value = Math.round((l?.min_share ?? .1) * 100); $('#loop-window').value = l?.window || 200;
   state.loopArms = structuredClone(l?.arms || [0, 1].map(i => ({ provider_id: enabled[Math.min(i, enabled.length - 1)]?.id || '', model: '' })));
-  updateLoopMode(); renderLoopArms(); setError('#loop-error'); $('#loop-dialog').showModal();
+  updateLoopMode(); updateLoopAuto(); renderLoopArms(); setError('#loop-error'); $('#loop-dialog').showModal();
+}
+function updateLoopAuto() { $('#loop-auto-fields').classList.toggle('hidden', !$('#loop-auto').checked); }
+function costComparison(winner, arms) {
+  const others = arms.filter(a => a.id !== winner.id && a.requests && a.avg_cost > 0); if (!winner.avg_cost || !others.length) return '';
+  const avg = others.reduce((n, a) => n + a.avg_cost, 0) / others.length, diff = (avg - winner.avg_cost) / avg;
+  return ` It costs ${pct(Math.abs(diff))} ${diff >= 0 ? 'less' : 'more'} per request than the others (${fmtCost(winner.avg_cost)} vs ${fmtCost(avg)}).`;
 }
 function updateLoopMode() { $('#loop-jev-fields').classList.toggle('hidden', $('input[name=loop-mode]:checked').value !== 'jev'); }
 // Model lists are cached as promises so rows loading together see each other's picks.
@@ -525,7 +555,7 @@ async function loadArmModels(index) {
 async function saveFeedbackLoop(e) {
   e.preventDefault(); const id = $('#loop-id').value;
   if (state.loopArms.some(a => !a.provider_id || !a.model)) { setError('#loop-error', 'Choose a live model for every row.'); return; }
-  const body = { name: $('#loop-name').value, slug: $('#loop-slug').value, mode: $('input[name=loop-mode]:checked').value, jev_api_key: $('#loop-jev-key').value, jev_sample: Number($('#loop-jev-sample').value) / 100, min_share: Number($('#loop-min-share').value) / 100, window: Number($('#loop-window').value), arms: state.loopArms.map(a => ({ id: a.id, provider_id: a.provider_id, model: a.model })) };
+  const body = { name: $('#loop-name').value, slug: $('#loop-slug').value, mode: $('input[name=loop-mode]:checked').value, jev_api_key: $('#loop-jev-key').value, jev_sample: Number($('#loop-jev-sample').value) / 100, min_share: Number($('#loop-min-share').value) / 100, window: Number($('#loop-window').value), auto_conclude: $('#loop-auto').checked, conclude_confidence: Number($('#loop-confidence').value) / 100, conclude_min_votes: Number($('#loop-min-votes').value), arms: state.loopArms.map(a => ({ id: a.id, provider_id: a.provider_id, model: a.model })) };
   const button = $('#loop-form [type=submit]'); button.disabled = true;
   try { const saved = await api(id ? `/api/feedback/loops/${id}` : '/api/feedback/loops', { method: id ? 'PUT' : 'POST', body: JSON.stringify(body) }); $('#loop-dialog').close(); toast(id ? 'Feedback loop updated' : `feedback/${saved.slug} is live · traffic starts evenly split`); state.feedbackSelected = saved.id; loadFeedbackLoops(); }
   catch (err) { setError('#loop-error', err.message); }
@@ -558,13 +588,71 @@ async function watchJevVerdict(box, traceID) {
     $('.feedback-prompt', box).innerHTML = `${vote.verdict === 'uncertain' ? '' : uiIcon(vote.verdict === 'liked' ? 'thumb-up' : 'thumb-down')}${vote.verdict === 'liked' ? 'Jev liked' : vote.verdict === 'disliked' ? 'Jev disliked' : 'Jev was unsure about'} this answer from ${esc(box.dataset.route)} · ${pct(vote.confidence)} sure${vote.verdict === 'uncertain' ? ' — not counted' : ''}`;
     return;
   }
-  box.classList.remove('judging'); $('.feedback-prompt', box).textContent = `Jev did not rate this answer from ${box.dataset.route} (outside the sampling rate, or Jev was unavailable)`;
+  box.classList.remove('judging'); $('.feedback-prompt', box).textContent = `No Jev rating yet for this answer from ${box.dataset.route}: it was outside the sampling rate, or it is still waiting in the judging queue (see the loop page)`;
 }
 function traceFeedbackDetail(t) {
   const m = parseJSON(t.metadata); if (!m?.feedback_loop) return '';
   const attempts = m.attempts || [], sampled = attempts.find(a => a.target_id === m.sampled_arm)?.route || 'a model', served = attempts.find(a => a.target_id === m.arm_id && a.status_code >= 200 && a.status_code < 300)?.route, v = t.feedback;
   const verdict = !v ? (m.served ? 'NOT RATED' : 'NOT SERVED') : v.verdict === 'uncertain' ? `JEV UNSURE · ${pct(v.confidence)}` : `${v.source === 'jev' ? `JEV · ${pct(v.confidence)}` : 'PERSON'} · ${v.verdict.toUpperCase()}`;
   return `<section class="routing-trace feedback-trace ${v ? esc(v.verdict) : ''}"><header><div><span>FEEDBACK LOOP · feedback/${esc(m.loop_slug || '')}</span><b>${esc(served || sampled)}</b></div><em>${esc(verdict)}</em></header><div class="routing-decision-copy"><span class="decision-lane">${m.mode === 'jev' ? 'JEV' : 'PEOPLE'}</span><p>Nexa drew <strong>${esc(sampled)}</strong> from the split (${pct(m.shares?.[m.sampled_arm])} share)${served && served !== sampled ? `; it failed, so <strong>${esc(served)}</strong> answered instead` : ''}${!m.served ? ' — no model answered successfully' : ''}.</p><small>${v ? `RATED ${esc(fmtDate(v.created_at).toUpperCase())}` : m.mode === 'jev' ? 'JEV RATES A SAMPLE OF ANSWERS IN THE BACKGROUND' : 'RATE IT IN THE PLAYGROUND OR THROUGH POST /v1/feedback'}</small></div></section>`;
+}
+
+// Response cache page.
+async function loadCache(fillForm = false) {
+  try {
+    const x = await api('/api/cache'); renderCacheStats(x.stats);
+    if (fillForm) { fillCacheForm(x.settings); renderCacheHowto(); }
+    markFresh('#cache-freshness');
+  } catch (e) { toast(e.message, 'error'); }
+}
+function renderCacheStats(st) {
+  const cell = (name, value, note) => `<div><span>${name}</span><b>${value}</b><small>${note}</small></div>`, hits = st.exact_hits + st.semantic_hits;
+  $('#cache-stats').innerHTML = cell('HIT RATE · 7 DAYS', pct(st.hit_rate), `${fmtNum(hits)} of ${fmtNum(st.requests)} cacheable requests`) + cell('SAVED · 7 DAYS', st.saved_usd > 0 ? fmtCost(st.saved_usd) : '$0', 'provider cost avoided') + cell('HITS', `${fmtNum(st.exact_hits)} · ${fmtNum(st.semantic_hits)}`, 'exact · semantic') + cell('ANSWER TIME', st.avg_hit_ms ? durationLabel(st.avg_hit_ms) : '—', st.avg_miss_ms ? `vs ${durationLabel(st.avg_miss_ms)} from a model` : 'from cache') + cell('STORED ANSWERS', fmtNum(st.entries), `${fmtNum(st.semantic_entries)} searchable by meaning`);
+}
+function fillCacheForm(c) {
+  $('#cache-exact').checked = c.exact_enabled; $('#cache-semantic').checked = c.semantic_enabled;
+  $('#cache-threshold').value = Math.round(c.threshold * 1000) / 10; $('#cache-ttl').value = Math.round(c.ttl_seconds / 36) / 100;
+  const providers = state.providers.filter(p => p.enabled && p.type !== 'anthropic');
+  $('#cache-provider').innerHTML = providers.map(p => `<option value="${esc(p.id)}">${esc(p.name)} · ${esc(p.slug)}</option>`).join('') || '<option value="">Add an OpenAI-compatible provider first</option>';
+  $('#cache-provider').value = c.embedding_provider_id || providers.find(p => p.type === 'openai')?.id || providers[0]?.id || '';
+  state.cacheModel = c.embedding_model || ''; setError('#cache-error'); updateCacheFields(); loadEmbeddingModels();
+}
+function updateCacheFields() { $('#cache-semantic-fields').classList.toggle('muted-fields', !$('#cache-semantic').checked); }
+async function loadEmbeddingModels() {
+  const id = $('#cache-provider').value, select = $('#cache-model');
+  if (!id) { select.innerHTML = '<option value="">No provider</option>'; return; }
+  select.disabled = true; select.innerHTML = '<option value="">Loading live models…</option>';
+  try {
+    const list = await api(`/api/providers/${id}/models`), names = [...new Set(list.map(x => x.id || x.name).filter(Boolean))].filter(n => /embed/i.test(n)).sort();
+    const options = state.cacheModel && !names.includes(state.cacheModel) ? [state.cacheModel, ...names] : names;
+    select.innerHTML = options.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('') || '<option value="">This provider lists no embedding models</option>';
+    select.value = state.cacheModel && options.includes(state.cacheModel) ? state.cacheModel : (names.find(n => n.includes('3-small')) || names[0] || '');
+    $('#cache-model-count').textContent = `${names.length} LIVE`;
+  } catch (e) { select.innerHTML = '<option value="">Could not load models</option>'; toast(e.message, 'error'); }
+  finally { select.disabled = false; }
+}
+async function saveCache(e) {
+  e.preventDefault(); setError('#cache-error');
+  const body = { exact_enabled: $('#cache-exact').checked, semantic_enabled: $('#cache-semantic').checked, threshold: Number($('#cache-threshold').value) / 100, ttl_seconds: Math.round(Number($('#cache-ttl').value) * 3600), embedding_provider_id: $('#cache-provider').value, embedding_model: $('#cache-model').value };
+  try { const c = await api('/api/cache', { method: 'PUT', body: JSON.stringify(body) }); state.cacheModel = c.embedding_model; toast(c.exact_enabled || c.semantic_enabled ? `Cache on · ${[c.exact_enabled && 'exact', c.semantic_enabled && 'semantic'].filter(Boolean).join(' + ')}` : 'Caching is off'); loadCache(); }
+  catch (err) { setError('#cache-error', err.message); }
+}
+async function clearCache() { if (!await confirmAction('Clear the response cache?', 'Every stored answer is removed; the next requests go to the models again.', 'Clear cache')) return; try { const r = await api('/api/cache', { method: 'DELETE' }); toast(`Cache cleared · ${fmtNum(r.removed)} answers removed`); loadCache(); } catch (e) { toast(e.message, 'error'); } }
+function renderCacheHowto() {
+  $('#cache-howto').innerHTML = renderMarkdown(['Every chat response says what happened in the `X-Nexa-Cache` header: `HIT-EXACT`, `HIT-SEMANTIC` (with `X-Nexa-Cache-Similarity`) or `MISS`.', '', '- `X-Nexa-Cache: off` skips the cache for one request', '- `X-Nexa-Cache: refresh` asks the model again and stores the new answer', '- Never cached: requests with tools, `n` above 1, feedback loops, and answers that stopped early', '', '```python', 'client.chat.completions.create(', '    model="openai/gpt-4o-mini",', '    messages=[{"role": "user", "content": "Hello"}],', '    extra_headers={"X-Nexa-Cache": "off"},', ')', '```'].join('\n'));
+}
+// Downloads every trace that matches the current filters.
+function exportTraces(format) {
+  const q = traceQuery(0); q.delete('limit'); q.delete('offset'); q.set('format', format);
+  const a = document.createElement('a'); a.href = `/api/traces/export?${q}`; a.download = ''; document.body.append(a); a.click(); a.remove();
+  toast(`Exporting ${fmtNum(state.traceTotal)} traces as ${format.toUpperCase()}`);
+}
+const ENDPOINT_TAGS = { '/v1/embeddings': 'EMBED', '/v1/responses': 'RESPONSES', '/v1/moderations': 'MODERATION', '/v1/images/generations': 'IMAGE', '/v1/images/edits': 'IMAGE', '/v1/audio/speech': 'SPEECH', '/v1/audio/transcriptions': 'TRANSCRIBE', '/v1/audio/translations': 'TRANSLATE' };
+function traceTags(m) { const hit = m.cache?.result; return `${m.endpoint ? `<small class="source-tag">${ENDPOINT_TAGS[m.endpoint] || 'API'}</small>` : ''}${hit === 'exact' || hit === 'semantic' ? `<small class="source-tag cache-tag" title="${hit === 'semantic' ? 'Semantic' : 'Exact'} cache hit">CACHE${hit === 'semantic' ? ' ≈' : ''}</small>` : ''}`; }
+function traceCacheDetail(t) {
+  const c = parseJSON(t.metadata)?.cache; if (!c || (c.result !== 'exact' && c.result !== 'semantic')) return '';
+  const semantic = c.result === 'semantic', similarity = `${(Number(c.similarity) * 100).toFixed(1)}%`;
+  return `<section class="routing-trace cache-trace"><header><div><span>RESPONSE CACHE · ${semantic ? 'SEMANTIC MATCH' : 'EXACT MATCH'}</span><b>Answered from the cache</b></div><em>SAVED ${esc(fmtCost(c.saved_usd))}</em></header><div class="routing-decision-copy"><span class="decision-lane">${semantic ? similarity : 'EXACT'}</span><p>${semantic ? `This conversation was ${similarity} similar to one answered earlier, so` : 'An identical request was answered earlier, so'} Nexa returned that answer from <strong>${esc(c.served_by || 'the provider')}</strong> without calling a model.${c.source_trace_id ? ` <button class="metric-link" type="button" data-trace-id="${esc(c.source_trace_id)}">Open the original trace</button>` : ''}</p><small>CACHED ${esc(fmtDate(c.cached_at).toUpperCase())}${c.embedding_ms ? ` · EMBEDDING ${Math.round(c.embedding_ms)} MS` : ''}</small></div></section>`;
 }
 
 function traceQuery(offset) {
@@ -617,7 +705,7 @@ function renderTraceDetail() {
     ? `<div class="trace-content"><section class="trace-block"><h3>FULL REQUEST / JSON</h3><pre>${esc(jsonTraceValue(t.request || t.prompt, 'user'))}</pre></section><section class="trace-block"><h3>OUTPUT / JSON</h3><pre>${esc(jsonTraceValue(t.response, 'assistant'))}</pre></section></div>`
     : `<div class="trace-content readable"><section class="trace-block"><h3>INPUT / CURRENT TURN</h3>${traceMessages(t.prompt)}${paramText ? `<p class="trace-params">${esc(paramText)}</p>` : ''}</section><section class="trace-block"><h3>OUTPUT / RESPONSE</h3>${traceResponse(t.response)}</section></div>`;
   const cell = (label, value, title = '') => `<div><span>${label}</span><b title="${esc(title)}">${value}</b></div>`;
-  $('#trace-detail').innerHTML = `<div class="trace-id-line"><span>${esc(t.request_id || t.id)}</span><time>${esc(fmtDate(t.created_at))}</time></div><div class="trace-summary">${cell('OUTCOME', `${esc(t.status.toUpperCase())} / ${t.status_code}`)}${cell('TOKENS', `${fmtNum(t.input_tokens)} IN · ${fmtNum(t.output_tokens)} OUT`)}${cell('LATENCY', durationLabel(t.latency_ms), latencyDetail)}${cell('EST. COST', fmtCost(t.cost_usd))}${cell('FIRST TOKEN', t.ttft_ms ? durationLabel(t.ttft_ms) : t.stream ? '—' : 'NOT STREAMED')}${cell('FINISH', esc((t.finish_reason || '—').toUpperCase()))}${cell('CACHED · REASONING', `${fmtNum(t.cached_tokens)} · ${fmtNum(t.reasoning_tokens)}`)}${cell('CALLER', esc(`${(t.source || 'api').toUpperCase()} · ${t.api_key_name || '—'}`), `Request ID ${t.request_id || '—'}`)}</div>${traceTimeline(t)}${traceRoutingDetail(t)}${traceFeedbackDetail(t)}${t.error ? `<div class="form-error">${esc(t.error)}</div>` : ''}${content}`;
+  $('#trace-detail').innerHTML = `<div class="trace-id-line"><span>${esc(t.request_id || t.id)}</span><time>${esc(fmtDate(t.created_at))}</time></div><div class="trace-summary">${cell('OUTCOME', `${esc(t.status.toUpperCase())} / ${t.status_code}`)}${cell('TOKENS', `${fmtNum(t.input_tokens)} IN · ${fmtNum(t.output_tokens)} OUT`)}${cell('LATENCY', durationLabel(t.latency_ms), latencyDetail)}${cell('EST. COST', fmtCost(t.cost_usd))}${cell('FIRST TOKEN', t.ttft_ms ? durationLabel(t.ttft_ms) : t.stream ? '—' : 'NOT STREAMED')}${cell('FINISH', esc((t.finish_reason || '—').toUpperCase()))}${cell('CACHED · REASONING', `${fmtNum(t.cached_tokens)} · ${fmtNum(t.reasoning_tokens)}`)}${cell('CALLER', esc(`${(t.source || 'api').toUpperCase()} · ${t.api_key_name || '—'}`), `Request ID ${t.request_id || '—'}`)}</div>${traceTimeline(t)}${traceCacheDetail(t)}${traceRoutingDetail(t)}${traceFeedbackDetail(t)}${t.error ? `<div class="form-error">${esc(t.error)}</div>` : ''}${content}`;
 }
 function renderProviderSelect() {
   const select = $('#play-provider'), previous = select.value, smart = state.routingProfiles.length ? '<option value="__smart__">Nexa Smart Routing · AUTO</option>' : '', feedback = state.feedbackLoops.length ? '<option value="__feedback__">Nexa Feedback Loop · LEARNING</option>' : '';
@@ -636,13 +724,13 @@ async function loadModels(refresh = false) {
 const isVirtual = id => id === '__smart__' || id === '__feedback__';
 function virtualModelOptions(id) {
   if (id === '__smart__') { const active = state.routingProfiles.find(p => p.active); return `${active ? '<option value="smart">smart · active default</option>' : ''}${state.routingProfiles.map(p => `<option value="smart/${esc(p.slug)}">smart/${esc(p.slug)} · ${esc(p.name)}</option>`).join('')}`; }
-  if (id === '__feedback__') return state.feedbackLoops.map(l => `<option value="feedback/${esc(l.slug)}">feedback/${esc(l.slug)} · ${esc(l.name)} · ${l.mode === 'jev' ? 'JEV' : 'PEOPLE'}${l.status === 'paused' ? ' · PAUSED' : ''}</option>`).join('');
+  if (id === '__feedback__') return state.feedbackLoops.map(l => `<option value="feedback/${esc(l.slug)}">feedback/${esc(l.slug)} · ${esc(l.name)} · ${l.mode === 'jev' ? 'JEV' : 'PEOPLE'}${l.status === 'paused' ? ' · PAUSED' : l.status === 'concluded' ? ' · WINNER PICKED' : ''}</option>`).join('');
   return null;
 }
 function toggleComparison() { const enabled = $('#play-compare').checked; $('#compare-controls').classList.toggle('hidden', !enabled); if (enabled) loadCompareModels(); }
 async function loadCompareModels(refresh = false) { const id = $('#compare-provider').value, model = $('#compare-model'), row = model.closest('.model-input-row'); model.disabled = true; row.classList.add('loading'); model.innerHTML = '<option>Fetching model catalog…</option>'; const done = () => { model.disabled = false; row.classList.remove('loading'); }; if (!id) { model.innerHTML = '<option value="">No provider available</option>'; done(); return; } const virtual = virtualModelOptions(id); if (virtual !== null) { model.innerHTML = virtual; done(); return; } try { const list = await api(`/api/providers/${id}/models?capability=chat${refresh ? '&refresh=1' : ''}`), names = [...new Set(list.map(x => x.id || x.name).filter(Boolean))].sort(); model.innerHTML = names.map(name => `<option value="${esc(name)}">${esc(name)}</option>`).join('') || '<option value="">No chat models returned</option>'; } catch (e) { model.innerHTML = '<option value="">Could not load models</option>'; toast(e.message, 'error'); } finally { done(); } }
 function updateChatRoute() { const smart = isVirtual($('#play-provider').value), p = state.providers.find(x => x.id === $('#play-provider').value), model = $('#play-model').value, reasoning = !smart && p?.type === 'openai' && isReasoningModel(model); $('#chat-route').textContent = smart ? (model || 'NOTHING TO ROUTE TO YET') : p && model ? `${p.slug}/${model}` : 'NO ROUTE SELECTED'; $('#play-temperature').disabled = reasoning; $('#play-temperature').title = reasoning ? 'This model controls its own sampling temperature.' : ''; }
-function welcomeHTML() { return '<div class="chat-welcome"><div class="welcome-glyph">N</div><h2>Start a conversation</h2><p>Select a provider and model, then send a message. Requests appear automatically in Traces.</p></div>'; }
+function welcomeHTML() { return '<div class="chat-welcome"><div class="welcome-glyph">N</div><h2>Start a conversation</h2><p>Select a provider and model, then send a message. Each message is sent on its own, without earlier turns, and appears in Traces.</p></div>'; }
 function clearChat() { if (state.abort) state.abort.abort(); state.conversation = []; $('#chat-messages').innerHTML = welcomeHTML(); $('#chat-metrics').textContent = 'READY'; saveConversation(); }
 function saveConversation() { store.set('nexa.playground', { conversation: state.conversation, system: $('#play-system').value }); }
 function updateJsonHint() { $('#json-hint').classList.toggle('hidden', !$('#play-json').checked); }
@@ -679,7 +767,7 @@ async function sendChat(e) {
   if ($('#play-compare').checked) { await sendComparison(text, smart, p, model); return; }
   input.value = ''; state.conversation.push({ role: 'user', content: text }); addMessage('user', text); saveConversation();
   const pending = addMessage('assistant', '', true), bubble = pending.querySelector('.bubble'), started = performance.now(), stream = $('#play-stream').checked;
-  const messages = []; const system = $('#play-system').value.trim(); if (system) messages.push({ role: 'system', content: system }); messages.push(...state.conversation);
+  const messages = []; const system = $('#play-system').value.trim(); if (system) messages.push({ role: 'system', content: system }); messages.push({ role: 'user', content: text });
   const request = { model: smart ? model : `${p.slug}/${model}`, messages, max_completion_tokens: Number($('#play-max-tokens').value), stream };
   if (stream) request.stream_options = { include_usage: true };
   if (!$('#play-temperature').disabled) request.temperature = Number($('#play-temperature').value);
@@ -729,7 +817,7 @@ async function sendChat(e) {
   state.abort = null; setSending(false); $('#chat-messages').scrollTop = $('#chat-messages').scrollHeight; loadStats();
   if (traceID) api(`/api/traces/${traceID}`).then(trace => setMessageMeta(pending, [durationLabel(trace.latency_ms), trace.ttft_ms ? `${durationLabel(trace.ttft_ms)} to first token` : '', `${fmtNum(trace.total_tokens)} tokens`, fmtCost(trace.cost_usd)])).catch(() => {});
 }
-async function sendComparison(text, smart, provider, model) { const secondSmart = isVirtual($('#compare-provider').value), secondProvider = state.providers.find(x => x.id === $('#compare-provider').value), secondModel = $('#compare-model').value; if ((!secondSmart && !secondProvider) || !secondModel) { toast('Choose the second provider and model', 'error'); return; } const input = $('#chat-input'); input.value = ''; state.conversation.push({ role: 'user', content: text }); addMessage('user', text); saveConversation(); const messages = [], system = $('#play-system').value.trim(); if (system) messages.push({ role: 'system', content: system }); messages.push(...state.conversation); const routes = [smart ? model : `${provider.slug}/${model}`, secondSmart ? secondModel : `${secondProvider.slug}/${secondModel}`], shell = addComparisonMessage(routes); state.abort = new AbortController(); setSending(true); $('#chat-metrics').textContent = '2 REQUESTS IN FLIGHT…'; const call = async route => { const started = performance.now(), request = { model: route, messages, max_completion_tokens: Number($('#play-max-tokens').value), stream: false }, routeModel = route.split('/').at(-1); if (!/^(smart|feedback\/)/.test(route) && !isReasoningModel(routeModel)) request.temperature = Number($('#play-temperature').value); if (Number($('#play-top-p').value) !== 1) request.top_p = Number($('#play-top-p').value); const stops = $('#play-stop').value.split(',').map(v => v.trim()).filter(Boolean); if (stops.length) request.stop = stops; if ($('#play-json').checked) { request.response_format = { type: 'json_object' }; request.messages = withJsonInstruction(messages); } const response = await fetch('/api/playground/chat', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request), signal: state.abort.signal }), traceID = response.headers.get('X-Nexa-Trace-Id') || ''; if (!response.ok) { const data = await response.json().catch(() => ({})); throw new Error(data?.error?.message || `Request failed (${response.status})`); } const out = await response.json(), raw = out?.choices?.[0]?.message, content = typeof raw?.content === 'string' ? raw.content : JSON.stringify(raw?.tool_calls || out, null, 2); return { content, usage: out?.usage, traceID, elapsed: performance.now() - started, route: routeLabel(response.headers, route) }; }; const results = await Promise.allSettled(routes.map(call)); results.forEach((result, index) => renderComparisonResult(shell, index, result)); const first = results.find(result => result.status === 'fulfilled'); if (first) { state.conversation.push({ role: 'assistant', content: first.value.content }); saveConversation(); } $('#chat-metrics').textContent = `${results.filter(v => v.status === 'fulfilled').length} / 2 COMPLETE`; state.abort = null; setSending(false); loadStats(); }
+async function sendComparison(text, smart, provider, model) { const secondSmart = isVirtual($('#compare-provider').value), secondProvider = state.providers.find(x => x.id === $('#compare-provider').value), secondModel = $('#compare-model').value; if ((!secondSmart && !secondProvider) || !secondModel) { toast('Choose the second provider and model', 'error'); return; } const input = $('#chat-input'); input.value = ''; state.conversation.push({ role: 'user', content: text }); addMessage('user', text); saveConversation(); const messages = [], system = $('#play-system').value.trim(); if (system) messages.push({ role: 'system', content: system }); messages.push({ role: 'user', content: text }); const routes = [smart ? model : `${provider.slug}/${model}`, secondSmart ? secondModel : `${secondProvider.slug}/${secondModel}`], shell = addComparisonMessage(routes); state.abort = new AbortController(); setSending(true); $('#chat-metrics').textContent = '2 REQUESTS IN FLIGHT…'; const call = async route => { const started = performance.now(), request = { model: route, messages, max_completion_tokens: Number($('#play-max-tokens').value), stream: false }, routeModel = route.split('/').at(-1); if (!/^(smart|feedback\/)/.test(route) && !isReasoningModel(routeModel)) request.temperature = Number($('#play-temperature').value); if (Number($('#play-top-p').value) !== 1) request.top_p = Number($('#play-top-p').value); const stops = $('#play-stop').value.split(',').map(v => v.trim()).filter(Boolean); if (stops.length) request.stop = stops; if ($('#play-json').checked) { request.response_format = { type: 'json_object' }; request.messages = withJsonInstruction(messages); } const response = await fetch('/api/playground/chat', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request), signal: state.abort.signal }), traceID = response.headers.get('X-Nexa-Trace-Id') || ''; if (!response.ok) { const data = await response.json().catch(() => ({})); throw new Error(data?.error?.message || `Request failed (${response.status})`); } const out = await response.json(), raw = out?.choices?.[0]?.message, content = typeof raw?.content === 'string' ? raw.content : JSON.stringify(raw?.tool_calls || out, null, 2); return { content, usage: out?.usage, traceID, elapsed: performance.now() - started, route: routeLabel(response.headers, route) }; }; const results = await Promise.allSettled(routes.map(call)); results.forEach((result, index) => renderComparisonResult(shell, index, result)); const first = results.find(result => result.status === 'fulfilled'); if (first) { state.conversation.push({ role: 'assistant', content: first.value.content }); saveConversation(); } $('#chat-metrics').textContent = `${results.filter(v => v.status === 'fulfilled').length} / 2 COMPLETE`; state.abort = null; setSending(false); loadStats(); }
 function addComparisonMessage(routes) { $('.chat-welcome')?.remove(); const item = document.createElement('div'); item.className = 'comparison-message'; item.innerHTML = `<span class="role">COMPARE</span><div class="comparison-grid">${routes.map((route, index) => `<article data-comparison="${index}"><header><span>${esc(route)}</span></header><div class="bubble markdown-body typing"></div><footer>Request in flight…</footer></article>`).join('')}</div>`; $('#chat-messages').append(item); $('#chat-messages').scrollTop = $('#chat-messages').scrollHeight; return item; }
 function renderComparisonResult(shell, index, result) { const card = $(`[data-comparison="${index}"]`, shell), bubble = $('.bubble', card), footer = $('footer', card); bubble.classList.remove('typing'); if (result.status === 'rejected') { bubble.textContent = `Request failed: ${result.reason.message}`; footer.textContent = 'FAILED'; return; } const value = result.value; $('header span', card).textContent = value.route; bubble.innerHTML = $('#play-json').checked ? jsonReplyHTML(value.content) : renderMarkdown(value.content); footer.textContent = `${durationLabel(value.elapsed)} · ${fmtNum(value.usage?.total_tokens)} tokens`; if (value.traceID) api(`/api/traces/${value.traceID}`).then(trace => { footer.innerHTML = `${durationLabel(trace.latency_ms)} · ${fmtNum(trace.total_tokens)} tokens · ${fmtCost(trace.cost_usd)} · <button class="metric-link" data-trace-id="${esc(value.traceID)}">Open trace</button>`; }).catch(() => {}); }
 function isReasoningModel(model) { const id = model.toLowerCase(); return /^gpt-5/.test(id) || /^o[134]/.test(id); }
@@ -761,7 +849,39 @@ async function loadApiKeys(render = true) {
     state.apiKeys = await api('/api/api-keys'); if (render) renderApiKeys(); renderOverviewState();
   } catch (e) { toast(e.message, 'error'); }
 }
-function renderApiKeys() { const query = $('#key-search').value.trim().toLowerCase(), keys = state.apiKeys.filter(k => !query || k.name.toLowerCase().includes(query) || k.prefix.toLowerCase().includes(query)); $('#key-search').closest('label').classList.toggle('hidden', state.apiKeys.length <= 5 && !query); $('#api-key-table').innerHTML = keys.length ? keys.map(k => `<tr><td><b>${esc(k.name)}</b></td><td><span class="model-name">${esc(k.prefix)}</span></td><td>${esc(fmtDate(k.created_at))}</td><td>${k.last_used_at ? esc(fmtDate(k.last_used_at)) : 'never'}</td><td><button class="detail-button" data-revoke-key="${esc(k.id)}" data-admin title="Revoke key" aria-label="Revoke key">${uiIcon('trash')}</button></td></tr>`).join('') : `<tr><td colspan="5" class="empty-row">${query ? 'No API keys match this search.' : 'No API keys yet. Create one per application instead of sharing the master key.'}</td></tr>`; }
+function limitChips(l = {}) { const chips = []; if (l.requests_per_minute) chips.push(`${fmtNum(l.requests_per_minute)} REQ/MIN`); if (l.tokens_per_minute) chips.push(`${fmtNum(l.tokens_per_minute)} TOK/MIN`); if (l.allowed_models?.length) chips.push(`${l.allowed_models.length} MODEL${l.allowed_models.length > 1 ? 'S' : ''}`); return chips.length ? chips.map(c => `<span class="limit-chip" title="${esc((l.allowed_models || []).join(', '))}">${c}</span>`).join('') : '<span class="limit-none">No limits</span>'; }
+function spendCell(k) { const budget = k.limits?.monthly_budget_usd || 0, spent = k.spent_month_usd || 0, money = spent > 0 ? fmtCost(spent) : '$0'; if (!budget) return `<div class="spend-cell"><div><b>${money}</b><small>no budget</small></div></div>`; const ratio = spent / budget; return `<div class="spend-cell ${ratio >= 1 ? 'over' : ratio >= .8 ? 'near' : ''}"><div><b>${money}</b><small>of $${budget >= 1 ? budget.toFixed(2) : Number(budget.toPrecision(2))}</small></div><i><span data-width="${ratio * 100}"></span></i></div>`; }
+function renderApiKeys() { const query = $('#key-search').value.trim().toLowerCase(), keys = state.apiKeys.filter(k => !query || k.name.toLowerCase().includes(query) || k.prefix.toLowerCase().includes(query)); $('#key-search').closest('label').classList.toggle('hidden', state.apiKeys.length <= 5 && !query); $('#api-key-table').innerHTML = keys.length ? keys.map(k => `<tr><td><b title="Created ${esc(fmtDate(k.created_at))}">${esc(k.name)}</b></td><td><span class="model-name">${esc(k.prefix)}</span></td><td>${spendCell(k)}</td><td><div class="limit-chips">${limitChips(k.limits)}</div></td><td>${k.last_used_at ? esc(fmtDate(k.last_used_at)) : 'never'}</td><td><div class="key-actions"><button class="detail-button" data-key-limits="${esc(k.id)}" data-admin title="Edit limits" aria-label="Edit limits for ${esc(k.name)}">${uiIcon('sliders')}</button><button class="detail-button" data-revoke-key="${esc(k.id)}" data-admin title="Revoke key" aria-label="Revoke key">${uiIcon('trash')}</button></div></td></tr>`).join('') : `<tr><td colspan="6" class="empty-row">${query ? 'No API keys match this search.' : 'No API keys yet. Create one per application instead of sharing the master key.'}</td></tr>`; applyWidths($('#api-key-table')); }
+function openLimits(id) {
+  const k = state.apiKeys.find(x => x.id === id); if (!k) return; const l = k.limits || {};
+  $('#limits-id').value = id; $('#limits-title').textContent = `Limits for ${k.name}`; state.limitsKey = k;
+  $('#limits-sub').textContent = `${k.prefix} · ${k.spent_month_usd > 0 ? fmtCost(k.spent_month_usd) : '$0'} spent this month`;
+  $('#limit-budget').value = l.monthly_budget_usd || ''; $('#limit-rpm').value = l.requests_per_minute || ''; $('#limit-tpm').value = l.tokens_per_minute || ''; $('#limit-models').value = (l.allowed_models || []).join('\n');
+  $('#limit-model-input').value = ''; setError('#limits-error'); updateLimitsUI(); $('#limits-dialog').showModal();
+}
+const limitModels = () => $('#limit-models').value.split(/[\n,]/).map(v => v.trim()).filter(Boolean);
+function setLimitModels(list) { $('#limit-models').value = [...new Set(list)].join('\n'); updateLimitsUI(); }
+function addLimitModel(value) { const v = value.trim(); if (!v) return; setLimitModels([...limitModels(), v]); $('#limit-model-input').value = ''; }
+// updateLimitsUI keeps presets, the spend bar, model chips, suggestions and the summary in step with the inputs.
+function updateLimitsUI() {
+  const budget = Number($('#limit-budget').value || 0), rpm = Number($('#limit-rpm').value || 0), tpm = Number($('#limit-tpm').value || 0), models = limitModels(), k = state.limitsKey || {};
+  $$('#limits-form .limit-presets').forEach(group => { const v = $('#' + group.dataset.for).value; $$('button', group).forEach(b => b.classList.toggle('active', Number(b.dataset.preset || 0) === Number(v || 0))); });
+  const spent = k.spent_month_usd || 0, ratio = budget ? spent / budget : 0;
+  $('#limit-usage').innerHTML = budget ? `<div><span>This month</span><b>${spent > 0 ? fmtCost(spent) : '$0'} of $${budget >= 1 ? budget.toFixed(2) : budget}</b></div><i class="${ratio >= 1 ? 'over' : ratio >= .8 ? 'near' : ''}"><span data-width="${ratio * 100}"></span></i>` : `<div><span>This month</span><b>${spent > 0 ? fmtCost(spent) : '$0'} spent · no cap</b></div>`;
+  applyWidths($('#limit-usage'));
+  $('#limit-model-chips').innerHTML = models.length ? models.map(m => `<span class="limit-model-chip">${esc(m)}<button type="button" data-remove-model="${esc(m)}" aria-label="Remove ${esc(m)}">${uiIcon('close')}</button></span>`).join('') : '<span class="limit-model-all">Every model is allowed</span>';
+  const suggestions = [...state.providers.filter(p => p.enabled).map(p => `${p.slug}/*`), ...(state.routingProfiles.length ? ['smart'] : []), ...state.feedbackLoops.map(f => `feedback/${f.slug}`)].filter(s => !models.includes(s));
+  $('#limit-model-suggest').innerHTML = suggestions.length ? `<span>Quick add</span>${suggestions.map(s => `<button type="button" data-suggest-model="${esc(s)}">${uiIcon('plus')}${esc(s)}</button>`).join('')}` : '';
+  const caps = [budget ? `spend up to $${budget >= 1 ? budget.toFixed(2) : budget} a month` : '', rpm ? `send ${fmtNum(rpm)} requests a minute` : '', tpm ? `use ${Number(tpm).toLocaleString()} tokens a minute` : ''].filter(Boolean);
+  const name = esc(k.name || 'This key'), who = models.length ? `only ${models.length === 1 ? 'this model' : `these ${models.length} models`}: <b>${models.map(esc).join(', ')}</b>` : '<b>every model</b>';
+  $('#limits-summary').innerHTML = caps.length ? `<b>${name}</b> can ${caps.length > 1 ? `${caps.slice(0, -1).join(', ')} and ${caps.at(-1)}` : caps[0]}, on ${who}.` : `<b>${name}</b> has no limits and can use ${who}.`;
+}
+async function saveLimits(e) {
+  e.preventDefault();
+  const body = { monthly_budget_usd: Number($('#limit-budget').value || 0), requests_per_minute: Number($('#limit-rpm').value || 0), tokens_per_minute: Number($('#limit-tpm').value || 0), allowed_models: $('#limit-models').value.split(/[\n,]/).map(v => v.trim()).filter(Boolean) };
+  try { await api(`/api/api-keys/${$('#limits-id').value}/limits`, { method: 'PUT', body: JSON.stringify(body) }); $('#limits-dialog').close(); toast('Limits saved · they apply from the next request'); loadApiKeys(); }
+  catch (err) { setError('#limits-error', err.message); }
+}
 async function createApiKey(e) {
   e.preventDefault();
   try { const out = await api('/api/api-keys', { method: 'POST', body: JSON.stringify({ name: $('#api-key-name').value }) }); $('#api-key-form').reset(); showSecret('New API key', 'Copy it now — Nexa stores only a hash. Use it as the api_key / Bearer token in your SDK. Revoke it here at any time.', out.key); loadApiKeys(); }

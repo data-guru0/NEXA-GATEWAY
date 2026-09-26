@@ -26,13 +26,19 @@
     <symbol id="icon-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
     <symbol id="icon-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
     <symbol id="icon-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5"/></symbol>
-    <symbol id="icon-chevron-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
-    <symbol id="icon-chevron-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
     <symbol id="icon-chevron-up" viewBox="0 0 24 24"><path d="m18 15-6-6-6 6"/></symbol>
     <symbol id="icon-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
     <symbol id="icon-feedback" viewBox="0 0 24 24"><path d="M4 7h9m-9 5h6m-6 5h9"/><path d="M17 4v6m0 0-2.5-2.5M17 10l2.5-2.5M17 20v-6m0 0-2.5 2.5M17 14l2.5 2.5"/></symbol>
     <symbol id="icon-thumb-up" viewBox="0 0 24 24"><path d="M7 11v9H4v-9h3Zm0 0 4-8a2.2 2.2 0 0 1 2.2 2.2V9h5.3a2 2 0 0 1 2 2.3l-1.2 7A2 2 0 0 1 17.3 20H7"/></symbol>
     <symbol id="icon-thumb-down" viewBox="0 0 24 24"><path d="M17 13V4h3v9h-3Zm0 0-4 8a2.2 2.2 0 0 1-2.2-2.2V15H5.5a2 2 0 0 1-2-2.3l1.2-7A2 2 0 0 1 6.7 4H17"/></symbol>
+    <symbol id="icon-wallet" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="13" rx="1.5"/><path d="M3 10h18M15.5 14.5h2"/></symbol>
+    <symbol id="icon-gauge" viewBox="0 0 24 24"><path d="M4 17a8 8 0 1 1 16 0"/><path d="m12 17 4.5-5.5"/></symbol>
+    <symbol id="icon-hash" viewBox="0 0 24 24"><path d="M9.5 4 7.5 20M16.5 4l-2 16M4.5 9h15M3.5 15h15"/></symbol>
+    <symbol id="icon-cube" viewBox="0 0 24 24"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Z"/><path d="M4 7.5 12 12l8-4.5M12 12v9"/></symbol>
+    <symbol id="icon-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="1.5"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></symbol>
+    <symbol id="icon-cache" viewBox="0 0 24 24"><path d="M13 2 4.5 13.5H11L10 22l8.5-11.5H12L13 2Z"/></symbol>
+    <symbol id="icon-sliders" viewBox="0 0 24 24"><path d="M4 6h9m4 0h3M4 12h3m4 0h9M4 18h11m4 0h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></symbol>
+    <symbol id="icon-download" viewBox="0 0 24 24"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 20h14"/></symbol>
     <symbol id="icon-pause" viewBox="0 0 24 24"><path d="M9 5v14M15 5v14"/></symbol>
     <symbol id="icon-play" viewBox="0 0 24 24"><path d="m7 5 12 7-12 7V5Z"/></symbol>
     <symbol id="icon-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none"/></symbol>
@@ -47,28 +53,31 @@
   <main id="login-view" class="login-shell">
     <section class="login-stage">
       <div class="stage-grid" aria-hidden="true"></div>
+      <div class="stage-glow" aria-hidden="true"></div>
       <div class="login-brand">
         <div class="brand-mark"><span>N</span><i></i></div>
         <span>NEXA / GATEWAY</span>
       </div>
       <div class="stage-copy">
         <div class="eyebrow"><span class="live-dot"></span> Independent inference infrastructure</div>
-        <h1>One route.<br><em>Every model.</em></h1>
-        <p>Control your providers, inspect every request, and move between models without rewriting your application.</p>
+        <h1><span class="rise">One route.</span><em class="rise">Every model.</em></h1>
+        <p class="rise">Control your providers, inspect every request, and move between models without rewriting your application.</p>
       </div>
-      <div class="route-map" aria-hidden="true">
-        <div class="route-origin"><span>YOUR APP</span></div>
-        <div class="route-line"><i></i><i></i><i></i></div>
-        <div class="route-core"><b>N</b><span>NEXA</span></div>
-        <div class="route-fan"><i></i><i></i><i></i><i></i></div>
-        <div class="route-nodes"><span>OPENAI</span><span>GROQ</span><span>GEMINI</span><span>CLAUDE</span></div>
-      </div>
+      <svg class="route-diagram" viewBox="0 0 1000 260" preserveAspectRatio="xMinYMid meet" role="img" aria-label="Your app sends every request to Nexa, which routes it to OpenAI, Groq, Gemini or Anthropic">
+        <path id="route-in" class="route-path" d="M136 130 H424"/><path class="route-flow" d="M136 130 H424"/>
+        <path id="route-0" class="route-path" d="M516 130 C 626 130, 642 34, 762 34"/><path class="route-flow" d="M516 130 C 626 130, 642 34, 762 34"/><path id="route-1" class="route-path" d="M516 130 C 626 130, 642 97, 762 97"/><path class="route-flow" d="M516 130 C 626 130, 642 97, 762 97"/><path id="route-2" class="route-path" d="M516 130 C 626 130, 642 163, 762 163"/><path class="route-flow" d="M516 130 C 626 130, 642 163, 762 163"/><path id="route-3" class="route-path" d="M516 130 C 626 130, 642 226, 762 226"/><path class="route-flow" d="M516 130 C 626 130, 642 226, 762 226"/>
+        <g class="route-app"><rect class="card-box" x="0" y="108" width="136" height="44"/><text class="app-label" x="68" y="135">YOUR APP</text></g>
+        <circle class="route-packet" r="4.5"><animateMotion dur="1.6s" begin="0.00s" repeatCount="indefinite"><mpath href="#route-in"/></animateMotion></circle><circle class="route-trail" r="3.2"><animateMotion dur="1.6s" begin="0.05s" repeatCount="indefinite"><mpath href="#route-in"/></animateMotion></circle><circle class="route-trail faint" r="2.2"><animateMotion dur="1.6s" begin="0.10s" repeatCount="indefinite"><mpath href="#route-in"/></animateMotion></circle><circle class="route-packet" r="4.5"><animateMotion dur="1.6s" begin="-0.40s" repeatCount="indefinite"><mpath href="#route-in"/></animateMotion></circle><circle class="route-trail" r="3.2"><animateMotion dur="1.6s" begin="-0.35s" repeatCount="indefinite"><mpath href="#route-in"/></animateMotion></circle><circle class="route-trail faint" r="2.2"><animateMotion dur="1.6s" begin="-0.30s" repeatCount="indefinite"><mpath href="#route-in"/></animateMotion></circle><circle class="route-packet" r="4.5"><animateMotion dur="1.6s" begin="-0.80s" repeatCount="indefinite"><mpath href="#route-in"/></animateMotion></circle><circle class="route-trail" r="3.2"><animateMotion dur="1.6s" begin="-0.75s" repeatCount="indefinite"><mpath href="#route-in"/></animateMotion></circle><circle class="route-trail faint" r="2.2"><animateMotion dur="1.6s" begin="-0.70s" repeatCount="indefinite"><mpath href="#route-in"/></animateMotion></circle><circle class="route-packet" r="4.5"><animateMotion dur="1.6s" begin="-1.20s" repeatCount="indefinite"><mpath href="#route-in"/></animateMotion></circle><circle class="route-trail" r="3.2"><animateMotion dur="1.6s" begin="-1.15s" repeatCount="indefinite"><mpath href="#route-in"/></animateMotion></circle><circle class="route-trail faint" r="2.2"><animateMotion dur="1.6s" begin="-1.10s" repeatCount="indefinite"><mpath href="#route-in"/></animateMotion></circle><circle class="route-packet" r="4.5"><animateMotion dur="1.6s" begin="0.00s" repeatCount="indefinite" calcMode="spline" keyTimes="0;1" keySplines="0.45 0 0.35 1"><mpath href="#route-0"/></animateMotion></circle><circle class="route-trail" r="3.2"><animateMotion dur="1.6s" begin="0.05s" repeatCount="indefinite" calcMode="spline" keyTimes="0;1" keySplines="0.45 0 0.35 1"><mpath href="#route-0"/></animateMotion></circle><circle class="route-trail faint" r="2.2"><animateMotion dur="1.6s" begin="0.10s" repeatCount="indefinite" calcMode="spline" keyTimes="0;1" keySplines="0.45 0 0.35 1"><mpath href="#route-0"/></animateMotion></circle><circle class="route-packet" r="4.5"><animateMotion dur="1.6s" begin="-0.40s" repeatCount="indefinite" calcMode="spline" keyTimes="0;1" keySplines="0.45 0 0.35 1"><mpath href="#route-1"/></animateMotion></circle><circle class="route-trail" r="3.2"><animateMotion dur="1.6s" begin="-0.35s" repeatCount="indefinite" calcMode="spline" keyTimes="0;1" keySplines="0.45 0 0.35 1"><mpath href="#route-1"/></animateMotion></circle><circle class="route-trail faint" r="2.2"><animateMotion dur="1.6s" begin="-0.30s" repeatCount="indefinite" calcMode="spline" keyTimes="0;1" keySplines="0.45 0 0.35 1"><mpath href="#route-1"/></animateMotion></circle><circle class="route-packet" r="4.5"><animateMotion dur="1.6s" begin="-0.80s" repeatCount="indefinite" calcMode="spline" keyTimes="0;1" keySplines="0.45 0 0.35 1"><mpath href="#route-2"/></animateMotion></circle><circle class="route-trail" r="3.2"><animateMotion dur="1.6s" begin="-0.75s" repeatCount="indefinite" calcMode="spline" keyTimes="0;1" keySplines="0.45 0 0.35 1"><mpath href="#route-2"/></animateMotion></circle><circle class="route-trail faint" r="2.2"><animateMotion dur="1.6s" begin="-0.70s" repeatCount="indefinite" calcMode="spline" keyTimes="0;1" keySplines="0.45 0 0.35 1"><mpath href="#route-2"/></animateMotion></circle><circle class="route-packet" r="4.5"><animateMotion dur="1.6s" begin="-1.20s" repeatCount="indefinite" calcMode="spline" keyTimes="0;1" keySplines="0.45 0 0.35 1"><mpath href="#route-3"/></animateMotion></circle><circle class="route-trail" r="3.2"><animateMotion dur="1.6s" begin="-1.15s" repeatCount="indefinite" calcMode="spline" keyTimes="0;1" keySplines="0.45 0 0.35 1"><mpath href="#route-3"/></animateMotion></circle><circle class="route-trail faint" r="2.2"><animateMotion dur="1.6s" begin="-1.10s" repeatCount="indefinite" calcMode="spline" keyTimes="0;1" keySplines="0.45 0 0.35 1"><mpath href="#route-3"/></animateMotion></circle>
+        <circle class="hub-ring" cx="470" cy="130" r="46"/><circle class="hub-ring late" cx="470" cy="130" r="46"/>
+        <circle class="hub" cx="470" cy="130" r="46"/><text class="hub-mark" x="470" y="143">N</text><text class="hub-label" x="470" y="202">NEXA</text>
+        <g class="route-card card-0"><rect class="card-box" x="762" y="13" width="226" height="42"/><use class="card-logo" href="#logo-openai" x="778" y="24" width="20" height="20"/><text class="card-label" x="810" y="39">OpenAI</text><circle class="card-dot" cx="970" cy="34" r="3.5"/></g><g class="route-card card-1"><rect class="card-box" x="762" y="76" width="226" height="42"/><use class="card-logo" href="#logo-groq" x="778" y="87" width="20" height="20"/><text class="card-label" x="810" y="102">Groq</text><circle class="card-dot" cx="970" cy="97" r="3.5"/></g><g class="route-card card-2"><rect class="card-box" x="762" y="142" width="226" height="42"/><use class="card-logo" href="#logo-gemini" x="778" y="153" width="20" height="20"/><text class="card-label" x="810" y="168">Gemini</text><circle class="card-dot" cx="970" cy="163" r="3.5"/></g><g class="route-card card-3"><rect class="card-box" x="762" y="205" width="226" height="42"/><use class="card-logo" href="#logo-anthropic" x="778" y="216" width="20" height="20"/><text class="card-label" x="810" y="231">Anthropic</text><circle class="card-dot" cx="970" cy="226" r="3.5"/></g>
+      </svg>
       <div class="stage-foot"><span>SELF-HOSTED</span><span>ENCRYPTED</span><span>OBSERVABLE</span></div>
     </section>
 
     <section class="login-panel">
       <form id="login-form" class="login-form">
-        <div class="form-index">Secure access</div>
+        <div class="form-index"><svg class="button-icon" aria-hidden="true"><use href="#icon-lock"/></svg>Secure access</div>
         <h2>Enter the control room</h2>
         <p>Use the master key printed during first startup, or a local Nexa account.</p>
         <div class="segmented" role="tablist">
@@ -98,6 +107,7 @@
         <a href="#providers" data-route="providers"><svg class="nav-icon"><use href="#icon-provider"/></svg><b>Providers</b></a>
         <a href="#routing" data-route="routing"><svg class="nav-icon"><use href="#icon-routing"/></svg><b>Smart Routing</b></a>
         <a href="#feedback" data-route="feedback"><svg class="nav-icon"><use href="#icon-feedback"/></svg><b>Feedback Loops</b></a>
+        <a href="#cache" data-route="cache"><svg class="nav-icon"><use href="#icon-cache"/></svg><b>Cache</b></a>
         <a href="#traces" data-route="traces"><svg class="nav-icon"><use href="#icon-traces"/></svg><b>Traces</b></a>
         <a href="#playground" data-route="playground"><svg class="nav-icon"><use href="#icon-playground"/></svg><b>Playground</b></a>
         <a href="#team" data-route="team"><svg class="nav-icon"><use href="#icon-access"/></svg><b>Access</b></a>
@@ -177,9 +187,33 @@
         <div id="loop-detail"></div>
       </section>
 
+      <section id="page-cache" class="page">
+        <div class="page-title-row"><div><h1>Response cache</h1><p>Answer repeated and reworded requests instantly, with no provider cost.</p></div><div class="title-actions"><span id="cache-freshness" class="freshness">Waiting for data</span><button id="clear-cache" class="outline-button" type="button" data-admin><svg class="button-icon"><use href="#icon-trash"/></svg>Clear cache</button></div></div>
+        <div id="cache-stats" class="loop-stats cache-stats"></div>
+        <div class="cache-grid">
+          <article class="panel"><header class="panel-head"><div><span class="panel-kicker">SETTINGS</span><h2>How answers are reused</h2></div></header>
+            <form id="cache-form" class="cache-form switch-scope">
+              <div class="switch-group">
+                <label class="switch-row"><span class="switch-copy"><b>Exact cache</b><small>An identical request gets the stored answer</small></span><input id="cache-exact" class="switch-input" type="checkbox" role="switch"><span class="switch" aria-hidden="true"><i></i></span></label>
+                <label class="switch-row"><span class="switch-copy"><b>Semantic cache</b><small>A reworded question matches by meaning</small></span><input id="cache-semantic" class="switch-input" type="checkbox" role="switch"><span class="switch" aria-hidden="true"><i></i></span></label>
+              </div>
+              <div id="cache-semantic-fields" class="cache-fields">
+                <label class="field"><span>EMBEDDING PROVIDER</span><select id="cache-provider"></select></label>
+                <label class="field"><span>EMBEDDING MODEL <b id="cache-model-count"></b></span><select id="cache-model"></select></label>
+                <label class="field"><span>MATCH AT SIMILARITY (%)</span><input id="cache-threshold" type="number" min="80" max="99.9" step="0.5" value="95"><small class="provider-field-note">Higher is stricter. 95% suits most apps.</small></label>
+              </div>
+              <label class="field"><span>KEEP ANSWERS FOR (HOURS)</span><input id="cache-ttl" type="number" min="0.02" max="2160" step="any" value="24"><small class="provider-field-note">After this, the next request asks the model again.</small></label>
+              <div id="cache-error" class="form-error hidden"></div>
+              <button type="submit" class="primary-action compact" data-admin><span>Save cache settings</span><svg class="button-icon"><use href="#icon-arrow"/></svg></button>
+            </form>
+          </article>
+          <article class="panel cache-howto"><header class="panel-head"><div><span class="panel-kicker">PER REQUEST</span><h2>Control it from your app</h2></div></header><div id="cache-howto" class="markdown-body"></div></article>
+        </div>
+      </section>
+
       <section id="page-traces" class="page">
         <div class="page-title-row"><div><h1>Traces</h1><p>Inspect requests, responses, routing decisions, latency, and cost.</p></div><div class="trace-head-meta"><span id="trace-freshness" class="freshness">Waiting for data</span><div class="trace-count"><strong id="trace-total">0</strong><span>RECORDED</span></div></div></div>
-        <div class="filter-bar"><form id="trace-search-form" class="search-field" role="search"><button class="search-submit" type="submit" aria-label="Search traces" title="Search"><svg><use href="#icon-search"/></svg></button><input id="trace-search" type="search" autocomplete="off" aria-label="Search traces" placeholder="Search prompts, responses, models, providers…"><button id="trace-search-clear" class="search-clear hidden" type="button" aria-label="Clear trace search" title="Clear search">×</button></form><div class="filter-tabs"><button class="active" data-status="all">All</button><button data-status="success">Success</button><button data-status="error">Errors</button></div><button id="trace-refresh" class="outline-button"><svg class="button-icon"><use href="#icon-refresh"/></svg>Refresh</button></div>
+        <div class="filter-bar"><form id="trace-search-form" class="search-field" role="search"><button class="search-submit" type="submit" aria-label="Search traces" title="Search"><svg><use href="#icon-search"/></svg></button><input id="trace-search" type="search" autocomplete="off" aria-label="Search traces" placeholder="Search prompts, responses, models, providers…"><button id="trace-search-clear" class="search-clear hidden" type="button" aria-label="Clear trace search" title="Clear search">×</button></form><div class="filter-tabs"><button class="active" data-status="all">All</button><button data-status="success">Success</button><button data-status="error">Errors</button></div><button id="trace-refresh" class="outline-button"><svg class="button-icon"><use href="#icon-refresh"/></svg>Refresh</button><div class="export-group" role="group" aria-label="Export the filtered traces"><span><svg class="button-icon"><use href="#icon-download"/></svg>EXPORT</span><button type="button" data-export="csv">CSV</button><button type="button" data-export="jsonl">JSONL</button></div></div>
         <div class="filter-bar trace-filters"><label><span>PROVIDER</span><select id="trace-provider"><option value="">All providers</option></select></label><label><span>MODEL</span><input id="trace-model" placeholder="Any model"></label><label><span>FROM</span><input id="trace-from" type="datetime-local"></label><label><span>TO</span><input id="trace-to" type="datetime-local"></label><button id="trace-filter-clear" class="outline-button" type="button">Clear filters</button></div>
         <div class="panel trace-table-panel"><div class="table-wrap"><table class="trace-table"><thead><tr><th>OUTCOME</th><th>ROUTE</th><th>MODEL</th><th>LANE</th><th>API KEY</th><th>TOKENS</th><th>LATENCY</th><th>COST</th><th>CREATED</th></tr></thead><tbody id="trace-table"></tbody></table></div><button id="trace-more" class="load-more hidden" type="button">LOAD MORE</button></div>
       </section>
@@ -207,7 +241,7 @@
           </aside>
           <div class="chat-stage">
             <div class="chat-top"><div><span class="live-dot"></span><b id="chat-route">NO ROUTE SELECTED</b></div><span id="chat-metrics">READY</span></div>
-            <div id="chat-messages" class="chat-messages"><div class="chat-welcome"><div class="welcome-glyph">N</div><h2>Start a conversation</h2><p>Select a provider and model, then send a message. Requests appear automatically in Traces.</p></div></div>
+            <div id="chat-messages" class="chat-messages"><div class="chat-welcome"><div class="welcome-glyph">N</div><h2>Start a conversation</h2><p>Select a provider and model, then send a message. Each message is sent on its own, without earlier turns, and appears in Traces.</p></div></div>
             <form id="chat-form" class="composer"><textarea id="chat-input" rows="2" placeholder="Ask the model something…" required></textarea><button type="submit" id="chat-send"><span>Send</span><svg class="button-icon"><use href="#icon-arrow"/></svg></button><small>⌘ ENTER</small></form>
           </div>
         </div>
@@ -221,7 +255,7 @@
         </div>
         <article class="panel keys-panel">
           <header class="panel-head"><div><span class="panel-kicker">APPLICATION ACCESS</span><h2>API keys</h2></div><div class="key-head-actions"><label class="panel-search hidden"><svg><use href="#icon-search"/></svg><input id="key-search" type="search" placeholder="Search keys" aria-label="Search API keys"></label><form id="api-key-form" class="inline-form" data-admin><input id="api-key-name" required maxlength="60" placeholder="Key name, e.g. billing-service"><button type="submit">CREATE KEY ＋</button></form></div></header>
-          <div class="table-wrap"><table><thead><tr><th>NAME</th><th>KEY</th><th>CREATED</th><th>LAST USED</th><th></th></tr></thead><tbody id="api-key-table"></tbody></table></div>
+          <div class="table-wrap"><table><thead><tr><th>NAME</th><th>KEY</th><th>SPEND THIS MONTH</th><th>LIMITS</th><th>LAST USED</th><th></th></tr></thead><tbody id="api-key-table"></tbody></table></div>
         </article>
         <article class="panel sdk-panel"><header><span class="panel-kicker">CONNECT YOUR APP</span><div class="code-tabs"><button class="active" data-code="python">PYTHON</button><button data-code="javascript">JAVASCRIPT</button><button data-code="curl">CURL</button></div></header><pre id="sdk-code"></pre><button id="copy-sdk" class="copy-code">COPY</button></article>
       </section>
@@ -284,6 +318,8 @@
       </section>
       <section class="router-section"><div class="router-section-head"><div><b>MODELS UNDER TEST</b><p>Two to four live models. Traffic starts evenly split and shifts toward the ones rated best.</p></div><button id="add-loop-arm" type="button">Add model</button></div><div id="loop-arms" class="loop-arms"></div></section>
       <section class="router-section"><div class="router-section-head"><div><b>CONFIGURATION</b></div></div>
+        <div class="switch-scope loop-auto"><div class="switch-group"><label class="switch-row"><span class="switch-copy"><b>Pick the winner automatically</b><small>Send all traffic to the leader once it is clearly best</small></span><input id="loop-auto" class="switch-input" type="checkbox" role="switch"><span class="switch" aria-hidden="true"><i></i></span></label></div></div>
+        <div id="loop-auto-fields" class="settings-grid loop-settings hidden"><label class="field"><span>CONCLUDE AT CONFIDENCE (%)</span><input id="loop-confidence" type="number" min="80" max="99.9" step="0.5" value="95"><small class="provider-field-note">The leader's chance of being the best model.</small></label><label class="field"><span>MINIMUM RATINGS FIRST</span><input id="loop-min-votes" type="number" min="10" max="10000" step="1" value="30"><small class="provider-field-note">Ratings needed before a winner is picked.</small></label></div>
         <div class="settings-grid loop-settings"><label class="field"><span>MINIMUM SHARE PER MODEL (%)</span><input id="loop-min-share" type="number" min="0" max="45" step="1" value="10"><small class="provider-field-note">Least traffic any model gets, even when it is losing.</small></label><label class="field"><span>RATINGS REMEMBERED PER MODEL</span><input id="loop-window" type="number" min="10" max="5000" step="10" value="200"><small class="provider-field-note">Only each model's latest ratings are counted.</small></label></div>
       </section>
       <div id="loop-error" class="form-error hidden"></div>
@@ -291,7 +327,42 @@
     </form>
   </dialog>
 
-  <dialog id="user-dialog"class="modal small-modal"><form id="user-form" method="dialog"><header><div><span class="section-code">ACCESS</span><h2>Create user</h2></div><button type="button" data-close-dialog aria-label="Close"><svg class="button-icon"><use href="#icon-close"/></svg></button></header><label class="field"><span>USERNAME</span><input id="new-username" minlength="3" required placeholder="operator"></label><label class="field"><span>PASSWORD</span><input id="new-password" type="password" minlength="8" required placeholder="At least 8 characters"></label><label class="field"><span>ROLE</span><select id="new-role"><option value="member">Member — view &amp; playground</option><option value="admin">Administrator — full control</option></select></label><div id="user-error" class="form-error hidden"></div><footer><button type="button" class="outline-button" data-close-dialog>Cancel</button><button type="submit" class="primary-action compact"><span>Create user</span><svg class="button-icon"><use href="#icon-plus"/></svg></button></footer></form></dialog>
+  <dialog id="limits-dialog" class="modal limits-modal">
+    <form id="limits-form" method="dialog">
+      <header><div><span class="section-code">API KEY LIMITS</span><h2 id="limits-title">Limits</h2><p id="limits-sub" class="limits-sub"></p></div><button type="button" data-close-dialog aria-label="Close"><svg class="button-icon"><use href="#icon-close"/></svg></button></header>
+      <input id="limits-id" type="hidden">
+      <div class="limit-cards">
+        <section class="limit-card">
+          <div class="limit-head"><span class="limit-icon"><svg class="button-icon"><use href="#icon-wallet"/></svg></span><div><b>Monthly budget</b><small>Blocks the key once this month's spend reaches it. Resets on the 1st (UTC).</small></div></div>
+          <label class="limit-input"><span class="affix">$</span><input id="limit-budget" type="number" min="0" step="0.01" placeholder="No limit" aria-label="Monthly budget in US dollars"><span class="affix end">/ month</span></label>
+          <div class="limit-presets" data-for="limit-budget"><button type="button" data-preset="">None</button><button type="button" data-preset="5">$5</button><button type="button" data-preset="25">$25</button><button type="button" data-preset="100">$100</button></div>
+          <div id="limit-usage" class="limit-usage"></div>
+        </section>
+        <section class="limit-card">
+          <div class="limit-head"><span class="limit-icon"><svg class="button-icon"><use href="#icon-gauge"/></svg></span><div><b>Requests per minute</b><small>Extra requests are refused with 429 and a Retry-After time.</small></div></div>
+          <label class="limit-input"><input id="limit-rpm" type="number" min="0" step="1" placeholder="No limit" aria-label="Requests per minute"><span class="affix end">req / min</span></label>
+          <div class="limit-presets" data-for="limit-rpm"><button type="button" data-preset="">None</button><button type="button" data-preset="60">60</button><button type="button" data-preset="300">300</button><button type="button" data-preset="1000">1,000</button></div>
+        </section>
+        <section class="limit-card">
+          <div class="limit-head"><span class="limit-icon"><svg class="button-icon"><use href="#icon-hash"/></svg></span><div><b>Tokens per minute</b><small>Prompt and answer tokens used over the last minute.</small></div></div>
+          <label class="limit-input"><input id="limit-tpm" type="number" min="0" step="1" placeholder="No limit" aria-label="Tokens per minute"><span class="affix end">tok / min</span></label>
+          <div class="limit-presets" data-for="limit-tpm"><button type="button" data-preset="">None</button><button type="button" data-preset="10000">10k</button><button type="button" data-preset="100000">100k</button><button type="button" data-preset="1000000">1M</button></div>
+        </section>
+      </div>
+      <section class="limit-card limit-models">
+        <div class="limit-head"><span class="limit-icon"><svg class="button-icon"><use href="#icon-cube"/></svg></span><div><b>Allowed models</b><small>Leave empty to allow every model. End with * to allow a whole provider.</small></div></div>
+        <div id="limit-model-chips" class="limit-model-chips"></div>
+        <div class="limit-model-add"><input id="limit-model-input" autocomplete="off" placeholder="Add a model, e.g. openai/gpt-4o-mini, and press Enter" aria-label="Add an allowed model"><button type="button" id="limit-model-add">Add</button></div>
+        <div id="limit-model-suggest" class="limit-model-suggest"></div>
+        <textarea id="limit-models" class="hidden" aria-hidden="true" tabindex="-1"></textarea>
+      </section>
+      <p id="limits-summary" class="limits-summary"></p>
+      <div id="limits-error" class="form-error hidden"></div>
+      <footer><button type="button" class="outline-button" data-close-dialog>Cancel</button><button type="submit" class="primary-action compact"><span>Save limits</span><svg class="button-icon"><use href="#icon-arrow"/></svg></button></footer>
+    </form>
+  </dialog>
+
+  <dialog id="user-dialog" class="modal small-modal"><form id="user-form" method="dialog"><header><div><span class="section-code">ACCESS</span><h2>Create user</h2></div><button type="button" data-close-dialog aria-label="Close"><svg class="button-icon"><use href="#icon-close"/></svg></button></header><label class="field"><span>USERNAME</span><input id="new-username" minlength="3" required placeholder="operator"></label><label class="field"><span>PASSWORD</span><input id="new-password" type="password" minlength="8" required placeholder="At least 8 characters"></label><label class="field"><span>ROLE</span><select id="new-role"><option value="member">Member — view &amp; playground</option><option value="admin">Administrator — full control</option></select></label><div id="user-error" class="form-error hidden"></div><footer><button type="button" class="outline-button" data-close-dialog>Cancel</button><button type="submit" class="primary-action compact"><span>Create user</span><svg class="button-icon"><use href="#icon-plus"/></svg></button></footer></form></dialog>
 
   <dialog id="trace-dialog" class="modal trace-modal"><div><header><div><span class="section-code">TRACE DETAILS</span><h2 id="trace-dialog-title">Request trace</h2></div><div class="trace-modal-tools"><div id="trace-nav" class="trace-nav hidden" title="Step through the list with the ↑ and ↓ keys"><button id="trace-previous" type="button" aria-label="Previous trace"><svg class="button-icon"><use href="#icon-chevron-up"/></svg></button><span id="trace-position">1 / 1</span><button id="trace-next" type="button" aria-label="Next trace"><svg class="button-icon"><use href="#icon-chevron-down"/></svg></button></div><button type="button" class="trace-close" data-close-dialog aria-label="Close"><svg class="button-icon"><use href="#icon-close"/></svg></button></div></header><div class="trace-modebar"><div><span>DISPLAY MODE</span><p id="trace-view-description">Conversation formatted for reading</p></div><div class="view-tabs"><button class="active" data-trace-view="readable">Readable</button><button data-trace-view="json">Raw JSON</button></div></div><div id="trace-detail"></div></div></dialog>
   <dialog id="key-dialog" class="modal small-modal"><div><header><div><span class="section-code">ONE-TIME SECRET</span><h2 id="key-dialog-title">New master key</h2></div><button type="button" data-close-dialog aria-label="Close"><svg class="button-icon"><use href="#icon-close"/></svg></button></header><p id="key-dialog-note">This value will not be shown again. The previous master key no longer works.</p><div class="key-reveal"><code id="new-master-key"></code><button id="copy-master-key">Copy</button></div></div></dialog>
