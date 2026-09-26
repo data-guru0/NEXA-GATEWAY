@@ -55,6 +55,7 @@ func New(s *store.Store, log *slog.Logger, secureCookies bool) http.Handler {
 	r.Get("/healthz", x.health)
 	r.With(x.gatewayAuth).Post("/v1/chat/completions", x.Gateway.ChatCompletions)
 	r.With(x.gatewayAuth).Get("/v1/models", x.allModels)
+	r.With(x.gatewayAuth).Post("/v1/feedback", x.vote)
 	r.Route("/api", func(r chi.Router) {
 		r.Post("/auth/login", x.login)
 		r.Post("/auth/logout", x.logout)
@@ -74,6 +75,9 @@ func New(s *store.Store, log *slog.Logger, secureCookies bool) http.Handler {
 			r.Get("/prices", x.prices)
 			r.Get("/api-keys", x.apiKeys)
 			r.Post("/playground/chat", x.playground)
+			r.Get("/feedback/loops", x.feedbackLoops)
+			r.Get("/feedback/loops/{id}/stats", x.feedbackStats)
+			r.Post("/feedback/votes", x.vote)
 			r.Group(func(r chi.Router) {
 				r.Use(x.requireAdmin)
 				r.Post("/providers", x.createProvider)
@@ -92,6 +96,12 @@ func New(s *store.Store, log *slog.Logger, secureCookies bool) http.Handler {
 				r.Post("/api-keys", x.createAPIKey)
 				r.Delete("/api-keys/{id}", x.deleteAPIKey)
 				r.Post("/master-key/rotate", x.rotateMaster)
+				r.Post("/feedback/loops", x.createFeedbackLoop)
+				r.Put("/feedback/loops/{id}", x.updateFeedbackLoop)
+				r.Delete("/feedback/loops/{id}", x.deleteFeedbackLoop)
+				r.Post("/feedback/loops/{id}/pause", x.setFeedbackStatus("paused"))
+				r.Post("/feedback/loops/{id}/resume", x.setFeedbackStatus("running"))
+				r.Post("/feedback/loops/{id}/reset", x.resetFeedbackLoop)
 			})
 		})
 	})
@@ -599,6 +609,11 @@ func (s *Server) allModels(w http.ResponseWriter, r *http.Request) {
 			data = append(data, map[string]any{"id": "smart/" + p.Slug, "object": "model", "owned_by": "Nexa Smart Routing", "profile": p.Slug})
 		}
 	}
+	if loops, e := s.Store.FeedbackLoops(); e == nil {
+		for _, l := range loops {
+			data = append(data, map[string]any{"id": "feedback/" + l.Slug, "object": "model", "owned_by": "Nexa Feedback Loop", "mode": l.Mode})
+		}
+	}
 	models, failed := s.Gateway.AllModels(r.Context(), providers)
 	if failed > 0 {
 		w.Header().Set("X-Nexa-Provider-Errors", strconv.Itoa(failed))
@@ -731,7 +746,14 @@ func (s *Server) trace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 404, "Trace not found.")
 		return
 	}
-	writeJSON(w, 200, v)
+	out := struct {
+		store.Trace
+		Feedback *store.FeedbackVote `json:"feedback,omitempty"`
+	}{Trace: v}
+	if vote, err := s.Store.VoteForTrace(v.ID); err == nil {
+		out.Feedback = &vote
+	}
+	writeJSON(w, 200, out)
 }
 
 func (s *Server) playground(w http.ResponseWriter, r *http.Request) {
