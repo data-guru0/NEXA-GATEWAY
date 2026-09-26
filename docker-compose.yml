@@ -5,11 +5,49 @@ services:
     ports:
       - "${NEXA_PORT:-8080}:8080"
     environment:
+      NEXA_DATABASE_URL: "postgres://nexa:${POSTGRES_PASSWORD:-nexa}@postgres:5432/nexa?sslmode=disable"
+      NEXA_REDIS_URL: "redis://redis:6379/0"
+      NEXA_ENCRYPTION_KEY: "${NEXA_ENCRYPTION_KEY:-}"
       JEV_API_KEY: "${JEV_API_KEY:-}"
       TYPESAFE_API_KEY: "${TYPESAFE_API_KEY:-}"
     volumes:
-      - nexa-data:/data
+      - nexa-data:/data # secret.key (unless NEXA_ENCRYPTION_KEY is set)
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: nexa
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-nexa}"
+      POSTGRES_DB: nexa
+    volumes:
+      - nexa-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexa -d nexa"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis/redis-stack-server:7.4.0-v8
+    environment:
+      REDIS_ARGS: "--appendonly yes --save 60 1000"
+    volumes:
+      - nexa-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
     restart: unless-stopped
 
 volumes:
   nexa-data:
+  nexa-postgres:
+  nexa-redis:
